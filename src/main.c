@@ -1,4 +1,33 @@
 /*
+ * ESP32 MQTT TEMPLATE PROJECT
+ * 
+ * This is a template version of the ESP32MQTTBase project. It has been modified
+ * to remove specific BMS (Battery Management System) code and replace it with
+ * generic placeholders for easy customization.
+ * 
+ * TEMPLATE PLACEHOLDERS:
+ * - Search for "PutInputCodeHere" to find places where you should add your
+ *   specific input reading, parsing, and communication code.
+ * - Search for "PutOutputFormattingForMqttHere" to find places where you should
+ *   customize the MQTT output formatting for your data structure.
+ * 
+ * RETAINED FEATURES:
+ * - WiFi configuration with captive portal
+ * - MQTT connectivity with reconnection handling
+ * - Web-based configuration interface
+ * - OTA (Over-The-Air) firmware updates
+ * - System monitoring and watchdog functionality
+ * - Persistent configuration storage (NVS)
+ * 
+ * TO USE THIS TEMPLATE:
+ * 1. Replace input_data_t struct with your data structure
+ * 2. Implement your communication protocol and data reading logic
+ * 3. Customize the MQTT JSON output format
+ * 4. Update default configuration values as needed
+ * 5. Test with your specific hardware and data sources
+ */
+
+/*
  * CONDITIONAL LOGGING CONFIGURATION
  * 
  * To enable debug logging for this specific file, uncomment the line below.
@@ -76,7 +105,7 @@ static bool debug_logging = false;
 #define WIFI_NVS_KEY_PASS "pass"
 #define MQTT_NVS_KEY_URL "broker_url"
 #define NVS_KEY_SAMPLE_INTERVAL "sample_interval"
-#define NVS_KEY_BMS_TOPIC "BMS_Topic"
+#define NVS_KEY_DATA_TOPIC "data_topic"
 #define NVS_KEY_WATCHDOG_COUNTER "watchdog_cnt"
 #define NVS_KEY_PACK_NAME "pack_name"
 #define DEFAULT_WIFI_SSID "yourSSID"
@@ -88,7 +117,7 @@ static bool debug_logging = false;
 static char wifi_ssid[33] = DEFAULT_WIFI_SSID;
 static char wifi_pass[65] = DEFAULT_WIFI_PASS;
 static char mqtt_broker_url[128] = DEFAULT_MQTT_BROKER_URL;
-char bms_topic[41] = "BMS/JKBMS";  // Remove static to make it globally accessible
+char data_topic[41] = "Data/Template";  // Remove static to make it globally accessible
 static long sample_interval_ms = DEFAULT_SAMPLE_INTERVAL;
 static uint32_t watchdog_reset_counter = 0;  // Watchdog timer reset counter
 static char pack_name[64] = DEFAULT_PACK_NAME;  // Pack name field
@@ -104,7 +133,7 @@ static char pack_name[64] = DEFAULT_PACK_NAME;  // Pack name field
 #define UART_BUF_SIZE 1024
 
 // Tag used for logging messages from this module
-static const char *TAG = "BMS_READER";
+static const char *TAG = "DATA_READER";
 
 // Wi-Fi Configuration
 #define EXAMPLE_ESP_MAXIMUM_RETRY  5
@@ -118,93 +147,32 @@ static const char *TAG = "BMS_READER";
 static esp_mqtt_client_handle_t mqtt_client;
 static int wifi_retry_num = 0;
 
-// Placeholder structures for BMS data
-// This will be populated with more fields later
+// Template data structure for input data
+// Replace this with your specific data structure
 typedef struct {
-    float pack_voltage;
-    float pack_current;
-    uint8_t soc_percent;
-    // Cell voltages will be handled separately or in an array here
-    float cell_voltages[24]; // Assuming max 24 cells for now
-    int num_cells;
-    float min_cell_voltage;
-    float max_cell_voltage;
-    float cell_voltage_delta;
-    float mosfet_temp;
-    float probe1_temp;
-    float probe2_temp;
-    // Add common system status fields
-    uint8_t charge_mosfet_status;
-    uint8_t discharge_mosfet_status;
-    uint8_t balancing_active;
-    uint32_t battery_capacity_ah;
-    uint32_t remaining_capacity_ah;
-    uint8_t num_temp_sensors;
-    uint8_t battery_type;
-    uint8_t low_capacity_alarm;
-    // Add other fields from your target JSON here as they are parsed
-    // e.g., uint16_t pack_rate_cap;
-    // ...
-} bms_data_t;
+    // PutInputCodeHere: Define your data structure fields here
+    // Example fields (replace with your actual data fields):
+    float example_voltage;
+    float example_current;
+    uint8_t example_percentage;
+    // Add your specific data fields here
+} input_data_t;
 
-// Global instance of BMS data
-static bms_data_t current_bms_data;
+// Global instance of input data
+static input_data_t current_input_data;
 
 
-// --- Data Identification Code Table (auto-generated from CSV) ---
-typedef struct {
-    uint8_t id;
-    const char *name;
-    int byte_len;
-    const char *type;
-    const char *info;
-} bms_idcode_t;
-
-static const bms_idcode_t bms_idcodes[] = {
-    {0x99, "Equalizing opening differential", 2, "HEX", "10 - 1000 MV"},
-    {0x9a, "Active equalization switch", 1, "HEX", "0 off or 1 on"},
-    {0x9b, "Power tube temperature protection value", 2, "HEX", "0 - 100 °C"},
-    {0x9f, "Temperature protection value in battery box", 2, "HEX", "0 - 100 °C"},
-    {0xa0, "Recovery value 2 of battery in box", 2, "HEX", "40 - 100 °C"},
-    {0xa1, "Battery temperature difference", 2, "HEX", "40 -- 100 °C"},
-    {0xa2, "Battery charging 2 high temperature protection value", 2, "HEX", "5-20 °C"},
-    {0xa3, "High Temperature Protection Value for Battery Charging", 2, "HEX", "0-100 °C Y"},
-    {0xa4, "High Temperature Protection Value for Battery Discharge", 2, "HEX", "0 - 100 °C"},
-    {0xa5, "Charging cryoprotection value", 2, "HEX", "- 45 °C /+ 25 °C(No datum - signed data)"},
-    {0xa6, "Recovery value 2 of charge cryoprotection", 2, "HEX", "- 45 °C /+ 25 °C(No datum - signed data)"},
-    {0xa7, "Discharge cryoprotection value", 2, "HEX", "- 45 °C /+ 25 °C(No datum - signed data)"},
-    {0xa8, "Discharge Low Temperature Protection Recovery Value", 2, "HEX", "- 45 °C /+ 25 °C(No datum - signed data)"},
-    {0xa9, "Number of battery strings settings", 1, "HEX", "13 - 32"},
-    {0xaa, "Battery Capacity Settings", 4, "HEX", "AH"},
-    {0xab, "Charging MOS switch", 1, "HEX", "OFF 1 ON"},
-    {0xac, "Discharge MOS switch", 1, "HEX", "OFF 1 ON"},
-    {0xad, "Current Calibration", 2, "HEX", "100 MA- 20000 MA"},
-    {0xae, "Protective Board 1 Address", 1, "HEX", "This site is reserved and used in cascade"},
-    {0xaf, "Battery type", 1, "HEX", "0: lithium iron phosphate, 1: ternary, 2: lithium titanate"},
-    {0xb0, "Sleep Wait Time", 2, "HEX", "Second data, for reference"},
-    {0xb1, "Low Capacity Alarm Value", 1, "HEX", "0 - 80%"},
-    {0xb2, "Modify parameter password", 10, "HEX", "For temporary reference, fix a password"},
-    {0xb3, "Special Charger 1 Switch", 1, "HEX", "0 OFF 1 ON"},
-    {0xb4, "Device ID Code", 8, "Code", "Example 60300001 ..."},
-    {0xb5, "Date of production", 4, "Code", "Example 2004 ..."},
-    {0xb6, "System working time", 4, "HEX", "Reset when leaving the factory, unit: Min"},
-    {0xb7, "Software Version Number", 15, "Code", "NW_1_0_0_200428"},
-    {0xb8, "Start Current Calibration", 1, "HEX", "1: Start Calibration 0: Turn off calibration"},
-    {0xb9, "Actual battery capacity", 4, "HEX", "Code AH"},
-    {0xba, "Naming of factory ID", 24, "Column", "BT 3072020120000200521001 ..."},
-};
-#define BMS_IDCODES_COUNT (sizeof(bms_idcodes)/sizeof(bms_idcodes[0]))
-
-// --- Store decoded extra fields for MQTT output ---
-typedef struct {
-    uint8_t id;
-    uint32_t value;
-    char strval[48]; // For ASCII fields
-    int is_ascii;
-} bms_extra_field_t;
-#define MAX_EXTRA_FIELDS 32
-static bms_extra_field_t extra_fields[MAX_EXTRA_FIELDS];
-static int extra_fields_count = 0;
+// PutInputCodeHere: Define your protocol-specific data structures here
+// Example: If you need to store parsed fields from your input data
+// typedef struct {
+//     uint8_t id;
+//     uint32_t value;
+//     char strval[48];
+//     int is_ascii;
+// } parsed_field_t;
+// #define MAX_PARSED_FIELDS 32
+// static parsed_field_t parsed_fields[MAX_PARSED_FIELDS];
+// static int parsed_fields_count = 0;
 
 // Forward declarations for functions defined later in this file
 
@@ -229,12 +197,13 @@ static esp_err_t ota_filesystem_handler(httpd_req_t *req);
 
 // Initializes the UART communication peripheral.
 void init_uart();
-// Sends a command to the BMS via UART.
-void send_bms_command(const uint8_t* cmd, size_t len);
+// Sends a command to the device via UART.
+void send_device_command(const uint8_t* cmd, size_t len);
 // Reads data from the BMS via UART. This function is static, meaning it's only visible within this file.
 static void read_bms_data(); 
-// Parses the raw data received from the BMS and prints it in a human-readable format.
-void parse_and_print_bms_data(const uint8_t *data, int len);
+// Template function to parse input data
+// PutInputCodeHere: Replace this function with your specific data parsing logic
+void parse_input_data(const uint8_t *data, int len);
 
 // New forward declarations for Wi-Fi and MQTT
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -243,26 +212,25 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data);
 void wifi_init_sta(void);
 static void mqtt_app_start(void);
-void publish_bms_data_mqtt(const bms_data_t *bms_data_ptr); // Combined publish function for now
+void publish_input_data_mqtt(const input_data_t *input_data_ptr); // Template publish function
 
 // Forward declaration for DNS hijack task
 void dns_hijack_task(void *pvParameter);
 
 // Constant array holding the "Read All Data" command bytes to be sent to the JK BMS.
 // This command requests a comprehensive status update from the BMS.
-const uint8_t bms_read_all_cmd[] = {
-    0x4E, 0x57, // Start Frame
-    0x00, 0x13, // Length (2 bytes, value 19: from this byte to end of checksum)
-    0x00, 0x00, 0x00, 0x00, // Terminal Number (4 bytes, typically 0)
-    0x06,       // Command Word (0x06 for "Read All Data")
-    0x03,       // Frame Source (e.g., 0x03 for host computer)
-    0x00, 0x00, // Data: Cell number (start) - 0x0000 for all cells
-    0x00, 0x00, // Data: Cell number (end) - 0x0000 for all cells
-    0x00, 0x00, // Reserved
-    0x68,       // End ID
-    0x00, 0x00, // Checksum (placeholder, actual CRC is calculated over previous bytes)
-    0x01, 0x29  // Checksum (CRC16 of bytes from Start Frame up to End ID)
-                // 0x0129 = 297. Sum of (4E+57+00+13+00+00+00+00+06+03+00+00+00+00+00+00+68) = 297
+// Template constants and commands
+// PutInputCodeHere: Define your protocol constants here
+// Examples:
+// const uint8_t your_read_command[] = {0x01, 0x02, 0x03, 0x04};
+// const uint8_t your_config_command[] = {0x05, 0x06, 0x07, 0x08};
+
+// Template command example (replace with your actual command)
+const uint8_t template_read_cmd[] = {
+    0xAA, 0x55,           // Start bytes (example)
+    0x01,                 // Command ID (example)
+    0x00,                 // Data length (example)
+    0xBB                  // End byte (example)
 };
 
 // Helper function to extract a 16-bit unsigned integer from a buffer.
@@ -314,10 +282,10 @@ void init_uart() {
     ESP_LOGI(TAG, "UART initialized");
 }
 
-// Sends a command (array of bytes) to the BMS via UART.
+// Sends a command (array of bytes) to the device via UART.
 // cmd: Pointer to the byte array containing the command.
 // len: Length of the command in bytes.
-void send_bms_command(const uint8_t* cmd, size_t len) {
+void send_device_command(const uint8_t* cmd, size_t len) {
     // Write data to UART.
     // (const char*)cmd: Cast command buffer to char pointer as expected by the function.
     int txBytes = uart_write_bytes(UART_NUM, (const char*)cmd, len);
@@ -327,540 +295,70 @@ void send_bms_command(const uint8_t* cmd, size_t len) {
 // Parses the raw data received from the BMS and prints it.
 // data: Pointer to the buffer containing the raw data from BMS.
 // len: Length of the data in bytes.
-void parse_and_print_bms_data(const uint8_t *data, int len) {
-    // Detailed frame format based on JK BMS RS485 Protocol documentation and Python examples:
-    // Offset | Length | Description
-    // -------|--------|----------------------------------------------------
-    // 0      | 2      | Start Frame (Fixed: 0x4E, 0x57)
-    // 2      | 2      | Length (Big-endian, from this field to the end of the checksum)
-    // 4      | 4      | Terminal Number (Usually 0x00000000)
-    // 8      | 1      | Command Word (e.g., 0x00 for response to read all)
-    // 9      | 1      | Frame Source (e.g., 0x00 for BMS)
-    // 10     | 1      | Transmission Type (e.g., 0x00 for normal data)
-    // 11     | N      | Frame Info / Data Payload (Actual BMS data, variable length)
-    // 11+N   | 4      | Record Number (Usually 0x00000000, can be part of some frames)
-    // 11+N+4 | 1      | End ID (Fixed: 0x68)
-    // 11+N+5 | 4      | Checksum (CRC, last 2 bytes are the sum, first 2 are 0x0000)
-    // Total length = 2 (Start) + Length_Field_Value
-
-    // Minimum length check for a valid frame.
-    // Smallest possible payload could be just a few bytes.
-    // Header (2) + Length (2) + Terminal (4) + Cmd (1) + Src (1) + Type (1) = 11 bytes
-    // Trailer: RecordNum (4, optional but often present) + EndID (1) + Checksum (4) = 9 bytes
-    // So, 11 (header) + min_payload (e.g. 1 byte for simple ack) + 9 (trailer) approx.
-    // The python script implies payload starts at 11 and ends at process_len - 9 (excluding RecNum, EndID, CRC).
-    // Minimum frame with 0 payload data: 2(start)+2(len_val)+4(term)+1(cmd)+1(src)+1(type) + 4(rec_num)+1(end_id)+4(crc) = 19 bytes.
-    // The length field itself is part of this.
-    // If frame_len_field is minimal (e.g. for header + trailer only, no payload), it would be 4+1+1+1+4+1+4 = 15.
-    if (len < 15) { 
-        ESP_LOGW(TAG, "Frame too short for basic structure: %d bytes", len);
-        return;
-    }
-
-    // 1. Check Start Frame (must be 0x4E, 0x57)
-    if (data[0] != 0x4E || data[1] != 0x57) {
-        ESP_LOGW(TAG, "Invalid start frame: %02X %02X", data[0], data[1]);
-        return;
-    }
-    ESP_LOGI(TAG, "Start frame OK");
-
-    // 2. Get Length field from the frame.
-    // This length is from the length field itself to the end of the checksum.
-    uint16_t frame_len_field = unpack_u16_be(data, 2); 
-    ESP_LOGI(TAG, "Frame length field value: %d", frame_len_field);
-
-    // Validate if the received data length (`len`) is sufficient for the declared frame length.
-    // Total expected length = 2 (Start Frame bytes) + frame_len_field.
-    if (len < (frame_len_field + 2)) { 
-        ESP_LOGW(TAG, "Incomplete frame. Expected header(2) + frame_len_field(%d) = %d bytes, but got %d bytes in total.", 
-                 frame_len_field, frame_len_field + 2, len);
-        return;
-    }
-    // Determine the length of the frame to process.
-    // This is either the declared total length or the received length, whichever is smaller (to prevent overruns).
-    // However, the previous check should ensure `len` is at least `declared_total_len`.
-    int declared_total_len = 2 + frame_len_field; 
-    int process_len = (declared_total_len < len) ? declared_total_len : len;
-
-
-    // 3. Calculate and Verify CRC (Checksum)
-    // The JK BMS uses a simple sum CRC.
-    // The CRC is calculated over the bytes from the Start Frame (0x4E) up to, but not including,
-    // the 4-byte checksum field itself.
-    // The actual 16-bit CRC sum is stored in the last 2 bytes of this 4-byte field (i.e., at offset process_len - 2).
-    // (The first 2 bytes of the checksum field are often 0x0000).
-
-    // Minimum length for CRC calculation: Header (11 bytes) + Trailer before CRC (RecNum(4) + EndID(1) = 5 bytes) + CRC (4 bytes) = 20 bytes.
-    // So, process_len must be at least 20 for a valid payload structure and CRC.
-    // If process_len is less than 4, we can't even read the CRC.
-    if (process_len < 4) {
-        ESP_LOGW(TAG, "Frame too short to contain CRC: %d bytes", process_len);
-        return;
-    }
-    // The python script sums `data[0:-4]`, meaning all bytes except the last four.
-    // So, we sum `process_len - 4` bytes.
-    uint32_t crc_calc = 0; // Use uint32_t for sum to avoid overflow before casting to uint16_t.
-    for (int i = 0; i < process_len - 4; i++) {
-        crc_calc += data[i];
-    }
-
-    // Extract the 16-bit CRC value received in the frame.
-    // It's located in the last 2 bytes of the 4-byte checksum field (i.e., at offset process_len - 2).
-    uint16_t crc_received = unpack_u16_be(data, process_len - 2);
-
-    ESP_LOGI(TAG, "Calculated CRC sum (16-bit): %u (0x%04X)", (uint16_t)crc_calc, (uint16_t)crc_calc);
-    ESP_LOGI(TAG, "Received CRC from frame: %u (0x%04X)", crc_received, crc_received);
-
-    // Compare calculated CRC with received CRC.
-    if ((uint16_t)crc_calc != crc_received) {
-        ESP_LOGE(TAG, "CRC mismatch! Calculated: 0x%04X, Received: 0x%04X. Frame might be corrupt.", 
-                 (uint16_t)crc_calc, crc_received);
-        // return; // Optionally, uncomment to discard frames with bad CRC. For debugging, we might proceed.
-    } else {
-        ESP_LOGI(TAG, "CRC OK");
-    }
-
-    // 4. Extract Data Payload (Frame Info section)
-    // The payload starts after the initial header fields:
-    // Start Frame (2) + Length (2) + Terminal Number (4) + Command Word (1) + Frame Source (1) + Transmission Type (1) = 11 bytes.
-    // The payload ends before the trailer fields:
-    // Record Number (4) + End ID (1) + Checksum (4) = 9 bytes.
-    // So, payload_len = process_len - (offset_of_payload) - (length_of_trailer)
-    // payload_len = process_len - 11 - 9 = process_len - 20.
-
-    // Check if frame is long enough to contain any payload.
-    if (process_len < 20) { // 11 (header) + 9 (trailer) = 20. If less, no payload.
-        ESP_LOGW(TAG, "Frame too short for data payload (less than 20 bytes): %d", process_len);
-        return;
-    }
-    // Pointer to the start of the payload.
-    const uint8_t *payload = &data[11];
-    // Calculate the length of the payload.
-    int payload_len = process_len - 20; 
+// Template function to parse input data  
+// PutInputCodeHere: Replace this function with your specific data parsing logic
+void parse_input_data(const uint8_t *data, int len) {
+    ESP_LOGI(TAG, "Parsing input data (%d bytes)...", len);
     
-    ESP_LOGI(TAG, "Payload length: %d bytes", payload_len);
-    if (payload_len <= 0) {
-        ESP_LOGW(TAG, "No actual payload data (payload_len <= 0).");
-        // If CRC was OK, this might be an ack or a frame with no data content.
-        // Depending on the command sent, this might be expected.
-        return; 
-    }
-    // Log the hexadecimal representation of the payload for debugging.
-    ESP_LOGI(TAG, "Payload HEX:");
-    ESP_LOG_BUFFER_HEX(TAG, payload, payload_len);
-
-    // Initialize current_bms_data fields to default/invalid values
-    current_bms_data.num_cells = 0;
-    current_bms_data.min_cell_voltage = 5.0f;
-    current_bms_data.max_cell_voltage = 0.0f;
-
-
-    // 5. Parse specific data fields from the payload.
-    // This parsing is based on the "Read All Data" (0x06) command response structure.
-    // The first byte of the payload for this response is typically 0x79 (Cell Voltages ID).
-
-    // Guard against empty payload before accessing payload[0].
-    if (payload_len == 0) { 
-        ESP_LOGW(TAG, "Payload is empty, cannot parse specific fields.");
-        return;
-    }
-    // Check if payload starts with the expected Cell Voltages ID (0x79).
-    if (payload[0] != 0x79) {
-        ESP_LOGW(TAG, "Payload does not start with 0x79 (Cell Voltages ID), instead: 0x%02X. Parsing may be incorrect for this response.", payload[0]);
-        // Depending on the actual command/response, this might not be an error.
-        // For "Read All Data", 0x79 is expected.
-        // return; // Optionally stop if the structure is not as expected.
-    }
-
-    // 5.1 Parse Cell Voltages (ID 0x79)
-    // Structure: 0x79 (ID) | ByteCount (1 byte) | Cell1_Hi | Cell1_Lo | Cell1_Info | Cell2_Hi | ...
-    // Python: bytecount = data[1] (relative to payload start)
-    // Python: cellcount = int(bytecount/3)
-    // Python: Voltages start at payload[2], each voltage uses 3 bytes.
-    //         The actual mV value is in the last 2 bytes of these 3 (skip 1, read 2 as u16_be).
-
-    if (payload_len < 2) { // Need at least ID (already checked) and ByteCount.
-        ESP_LOGW(TAG, "Payload too short for cell voltage byte count (needs at least 2 bytes).");
-        return;
-    }
-    uint8_t cell_voltage_bytecount = payload[1]; // Number of bytes used for all cell voltage data.
-    int num_cells = cell_voltage_bytecount / 3;  // Each cell's data is 3 bytes long.
-    ESP_LOGI(TAG, "Cell voltage data byte count from payload: %d, Calculated number of cells: %d", cell_voltage_bytecount, num_cells);
-
-    // Check if payload is long enough for all declared cell voltages.
-    // Expected length = 2 (ID + ByteCount) + cell_voltage_bytecount.
-    if (payload_len < (2 + cell_voltage_bytecount)) {
-        ESP_LOGW(TAG, "Payload too short for all cell voltages. Expected %d bytes for cell data part, got %d bytes in payload.", 
-                 (2 + cell_voltage_bytecount), payload_len);
-        // We might still try to parse what's available if num_cells > 0 and data seems partially there.
-        // For now, return if data is clearly insufficient.
-        return;
-    }
-
-    if (debug_logging) printf("Cell Voltages (V):\n");
-    float min_cell_voltage = 5.0f; // Initialize with a high value to find the minimum.
-    float max_cell_voltage = 0.0f; // Initialize with a low value to find the maximum.
-
-    for (int i = 0; i < num_cells; i++) {
-        // Offset for current cell's data within payload: 2 (ID+ByteCount) + i * 3 (3 bytes per cell).
-        // Voltage is in bytes 2 and 3 of these 3 bytes (i.e., skip the first byte of the 3-byte group).
-        // So, offset for mV value is payload_start + 2 + i*3 + 1.
-        int cell_data_start_offset = 2 + i * 3;
-        if ( (cell_data_start_offset + 2) < payload_len) { // Check bounds: need 3 bytes for cell i, last is at offset+2
-             uint16_t voltage_mv = unpack_u16_be(payload, cell_data_start_offset + 1); 
-             float voltage_v = voltage_mv / 1000.0f; // Convert mV to V.
-             if (debug_logging) printf("  Cell %2d: %.3f V\n", i + 1, voltage_v);
-             // Store individual cell voltage
-             if (i < 24) { // Ensure we don't write out of bounds of our array
-                 current_bms_data.cell_voltages[i] = voltage_v;
-             }
-             // Update min/max cell voltages, ensuring voltage_mv > 0 to avoid uninitialized cells if BMS reports them as 0.
-             if (voltage_mv > 0 && voltage_v < min_cell_voltage) min_cell_voltage = voltage_v;
-             if (voltage_v > max_cell_voltage) max_cell_voltage = voltage_v;
-        } else {
-            ESP_LOGW(TAG, "Not enough data in payload for cell %d voltage. Stopping cell voltage parsing.", i + 1);
-            break; // Stop if data runs out.
-        }
-    }
-    // Print Min, Max, and Delta cell voltages if cells were processed.
-    if (num_cells > 0) {
-        if (min_cell_voltage > 4.9f) min_cell_voltage = 0.0f; // If min_cell_voltage wasn't updated, set to 0.
-        if (debug_logging) {
-            printf("Min Cell Voltage: %.3f V\n", min_cell_voltage);
-            printf("Max Cell Voltage: %.3f V\n", max_cell_voltage);
-            printf("Cell Voltage Delta: %.3f V\n", max_cell_voltage - min_cell_voltage);
-        }
-        // Store in global struct
-        current_bms_data.num_cells = num_cells;
-        current_bms_data.min_cell_voltage = min_cell_voltage;
-        current_bms_data.max_cell_voltage = max_cell_voltage;
-        current_bms_data.cell_voltage_delta = max_cell_voltage - min_cell_voltage;
-    }
+    // PutInputCodeHere: Add your specific data parsing code here
+    // Examples:
+    // - Parse protocol frames (like Modbus, CAN, etc.)
+    // - Validate checksums
+    // - Extract specific data fields
+    // - Convert raw values to meaningful units
+    // - Perform data validation
+    // - etc.
     
-    // current_offset tracks the position in the payload after the last parsed field.
-    // Initialized to after the cell voltage block: ID (1) + ByteCount (1) + cell_voltage_bytecount.
-    int current_offset = 2 + cell_voltage_bytecount;
-
-    // 5.2 Parse Temperatures (IDs 0x80, 0x81, 0x82)
-    // Each temperature field: ID (1 byte) + Temperature Data (2 bytes, u16_be).
-    // Temperature conversion: If raw > 100, it's negative: -(raw - 100). Otherwise, it's raw. (As per Python example)
-    // Protocol doc might say value/10 for degrees C, with 1000 offset for negative. (e.g. 900 = -10C, 1100 = 10C)
-    // Sticking to Python example's simpler (raw > 100 ? -(raw-100) : raw) logic for now.
-
-    // MOSFET Temperature (ID 0x80)
-    if (payload_len > current_offset + 2 && payload[current_offset] == 0x80) { // Check ID and enough data (ID + 2 bytes)
-        uint16_t temp_fet_raw = unpack_u16_be(payload, current_offset + 1);
-        float temp_fet = (temp_fet_raw > 100) ? -(float)(temp_fet_raw - 100) : (float)temp_fet_raw;
-        if (debug_logging) printf("MOSFET Temperature: %.1f C (raw: %u)\n", temp_fet, temp_fet_raw);
-        current_bms_data.mosfet_temp = temp_fet; // Store data
-        current_offset += 3; // Advance offset by ID (1) + Data (2).
-    } else {
-        ESP_LOGW(TAG, "MOSFET Temp (ID 0x80) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-
-    // Probe 1 Temperature (ID 0x81)
-    if (payload_len > current_offset + 2 && payload[current_offset] == 0x81) {
-        uint16_t temp_1_raw = unpack_u16_be(payload, current_offset + 1);
-        float temp_1 = (temp_1_raw > 100) ? -(float)(temp_1_raw - 100) : (float)temp_1_raw;
-        if (debug_logging) printf("Probe 1 Temperature: %.1f C (raw: %u)\n", temp_1, temp_1_raw);
-        current_bms_data.probe1_temp = temp_1; // Store data
-        current_offset += 3;
-    } else {
-        ESP_LOGW(TAG, "Probe 1 Temp (ID 0x81) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-
-    // Probe 2 Temperature (ID 0x82)
-    if (payload_len > current_offset + 2 && payload[current_offset] == 0x82) {
-        uint16_t temp_2_raw = unpack_u16_be(payload, current_offset + 1);
-        float temp_2 = (temp_2_raw > 100) ? -(float)(temp_2_raw - 100) : (float)temp_2_raw;
-        if (debug_logging) printf("Probe 2 Temperature: %.1f C (raw: %u)\n", temp_2, temp_2_raw);
-        current_bms_data.probe2_temp = temp_2; // Store data
-        current_offset += 3;
-    } else {
-        ESP_LOGW(TAG, "Probe 2 Temp (ID 0x82) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-    
-    // 5.3 Parse Total Battery Voltage (ID 0x83)
-    // Structure: ID (1 byte) + Total Voltage Data (2 bytes, u16_be, value in 0.01V).
-    if (payload_len > current_offset + 2 && payload[current_offset] == 0x83) {
-        uint16_t total_voltage_raw = unpack_u16_be(payload, current_offset + 1); 
-        float total_v = total_voltage_raw / 100.0f;
-        if (debug_logging) printf("Total Battery Voltage: %.2f V (raw: %u)\n", total_v, total_voltage_raw);
-        current_bms_data.pack_voltage = total_v; // Store data
-        current_offset += 3;
-    } else {
-        ESP_LOGW(TAG, "Total Voltage (ID 0x83) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-
-    // 5.4 Parse Current (ID 0x84)
-    // Structure: ID (1 byte) + Current Data (2 bytes, u16_be).
-    // Current interpretation varies based on `frame_len_field` as per `data_bms_full.py`.
-    // Value is in 0.01A.
-    if (payload_len > current_offset + 2 && payload[current_offset] == 0x84) {
-        uint16_t current_raw = unpack_u16_be(payload, current_offset + 1);
-        float current_a;
-
-        ESP_LOGI(TAG, "Current parsing: frame_len_field=%u, current_raw=0x%04X (%u)", 
-                 frame_len_field, current_raw, current_raw);
-
-        // Logic from data_bms_full.py, swapped for alternative interpretation:
-        // `frame_len_field` is the length from the BMS packet (from length field itself to end of CRC).
-        if (frame_len_field < 260) {
-            // Method 2 (Previously for frame_len_field >= 260): MSB indicates sign.
-            // Python: if (value & 0x8000) == 0x8000 : current = (value & 0x7FFF)/100
-            //         else : current = ((value & 0x7FFF)/100) * -1
-            // This means if MSB is set, it's positive current (value & 0x7FFF).
-            // If MSB is clear, it's negative current -(value & 0x7FFF).
-            // Note: This is different from standard two\'s complement.
-            if ((current_raw & 0x8000) == 0x8000) {
-                current_a = (float)(current_raw & 0x7FFF) / 100.0f;
-            } else {
-                current_a = -((float)(current_raw & 0x7FFF) / 100.0f);
-            }
-            ESP_LOGI(TAG, "Current (method 2, frame_len_field < 260): %.2f A", current_a);
-        } else {
-            // Method 1 (Previously for frame_len_field < 260): (10000 - raw_value) * 0.01. This implies 10000 is zero current.
-            // e.g. raw=10000 -> 0A. raw=9900 -> 1A. raw=10100 -> -1A.
-            current_a = (float)(10000 - (int32_t)current_raw) * 0.01f;
-            ESP_LOGI(TAG, "Current (method 1, frame_len_field >= 260): %.2f A", current_a);
-        }
-
-        if (debug_logging) printf("Current: %.2f A (raw: %u)\n", current_a, current_raw);
-        current_bms_data.pack_current = current_a; // Store data
-        current_offset += 3;
-    } else {
-        ESP_LOGW(TAG, "Current (ID 0x84) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-
-    // 5.5 Parse Remaining Capacity (SOC) (ID 0x85)
-    // Structure: ID (1 byte) + SOC Data (1 byte, percentage).
-    if (payload_len > current_offset + 1 && payload[current_offset] == 0x85) { // Need ID + 1 byte data.
-        uint8_t soc_percent = unpack_u8(payload, current_offset + 1);
-        if (debug_logging) printf("Remaining Capacity (SOC): %u%%\n", soc_percent);
-        current_bms_data.soc_percent = soc_percent; // Store data
-        current_offset += 2; // Advance by ID(1) + Data(1).
-    } else {
-        ESP_LOGW(TAG, "SOC (ID 0x85) data missing or wrong ID at payload offset %d. Found ID: 0x%02X", 
-                 current_offset, payload_len > current_offset ? payload[current_offset] : 0xFF);
-    }
-    
-    // --- Parse additional fields from Data Identification Codes table ---
-    ESP_LOGI(TAG, "=== PARSING EXTRA FIELDS ===");
-    ESP_LOGI(TAG, "Starting extra field parsing at offset %d, payload length: %d", current_offset, payload_len);
-    
-    // Debug: Show the raw data we're about to parse
-    if (debug_logging && payload_len > current_offset) {
-        ESP_LOGI(TAG, "Raw data to parse (next 50 bytes):");
-        for (int debug_i = current_offset; debug_i < payload_len && debug_i < current_offset + 50; debug_i++) {
-            printf("0x%02X ", payload[debug_i]);
-            if ((debug_i - current_offset + 1) % 16 == 0) printf("\n");
-        }
-        printf("\n");
-    }
-    
-    extra_fields_count = 0;
-    int extra_offset = current_offset;
-    while (extra_offset < payload_len && extra_fields_count < MAX_EXTRA_FIELDS) {
-        uint8_t id = payload[extra_offset];
-        if (debug_logging) ESP_LOGI(TAG, "Found field ID 0x%02X at offset %d", id, extra_offset);
+    // Example placeholder parsing (replace with actual parsing logic):
+    if (len >= 4) {
+        // Example: Parse first 4 bytes as different data types
+        current_input_data.example_voltage = (float)((data[0] << 8) | data[1]) / 100.0f;  // Convert to voltage
+        current_input_data.example_current = (float)((data[2] << 8) | data[3]) / 100.0f;  // Convert to current  
+        current_input_data.example_percentage = len > 4 ? data[4] : 50;  // Use 5th byte if available
         
-        // Check if this field ID has already been processed
-        bool already_exists = false;
-        for (int j = 0; j < extra_fields_count; j++) {
-            if (extra_fields[j].id == id) {
-                already_exists = true;
-                if (debug_logging) ESP_LOGW(TAG, "DUPLICATE DETECTED: Field ID 0x%02X already exists at index %d", id, j);
-                break;
-            }
-        }
-        
-        if (!already_exists) {
-            int found = 0;
-            for (size_t i = 0; i < BMS_IDCODES_COUNT; ++i) {
-                if (bms_idcodes[i].id == id) {
-                    // Special debug for 0xB4
-                    if (id == 0xB4) {
-                        ESP_LOGI(TAG, "=== PROCESSING 0xB4 SPECIFICALLY ===");
-                        ESP_LOGI(TAG, "Field bytes: %d, Type: %s", bms_idcodes[i].byte_len, bms_idcodes[i].type);
-                        ESP_LOGI(TAG, "Available data: offset %d, payload_len %d", extra_offset, payload_len);
-                    }
-                    
-                    uint32_t value = 0;
-                    int bytes = bms_idcodes[i].byte_len;
-                    const char *type = bms_idcodes[i].type;
-                    int is_ascii = (type && (strcmp(type, "Code") == 0 || strcmp(type, "Column") == 0));
-                    char strval[48] = {0};
-                    if (bytes > 0 && (extra_offset + bytes) < payload_len) {
-                        // Always calculate numeric value (needed for fallback hex string)
-                        for (int b = 0; b < bytes; ++b) {
-                            value = (value << 8) | payload[extra_offset + 1 + b];
-                        }
-                        
-                        if (is_ascii) {
-                            int copylen = (bytes < 47) ? bytes : 47;
-                            memcpy(strval, &payload[extra_offset + 1], copylen);
-                            strval[copylen] = '\0';
-                            // Remove non-printable chars
-                            for (int s = 0; s < copylen; ++s) {
-                                if (strval[s] < 32 || strval[s] > 126) strval[s] = '\0';
-                            }
-                            
-                            // Special debug for 0xB4
-                            if (id == 0xB4) {
-                                ESP_LOGI(TAG, "0xB4 raw bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                                         payload[extra_offset + 1], payload[extra_offset + 2], payload[extra_offset + 3], payload[extra_offset + 4],
-                                         payload[extra_offset + 5], payload[extra_offset + 6], payload[extra_offset + 7], payload[extra_offset + 8]);
-                                ESP_LOGI(TAG, "0xB4 parsed string: '%s'", strval);
-                            }
-                            
-                            // Force Device ID Code to be string even if parsing results in empty string
-                            if (id == 0xB4 && strval[0] == '\0') {
-                                snprintf(strval, sizeof(strval), "%08X", (unsigned int)value);
-                                ESP_LOGI(TAG, "0xB4 forced to hex string: '%s'", strval);
-                            }
-                        }
-                    } else {
-                        if (id == 0xB4) {
-                            ESP_LOGW(TAG, "0xB4 SKIPPED: insufficient data. Need %d bytes, have %d", bytes, payload_len - extra_offset - 1);
-                        }
-                    }
-                    extra_fields[extra_fields_count].id = id;
-                    extra_fields[extra_fields_count].value = value;
-                    extra_fields[extra_fields_count].is_ascii = is_ascii;
-                    if (is_ascii) {
-                        strncpy(extra_fields[extra_fields_count].strval, strval, sizeof(extra_fields[extra_fields_count].strval)-1);
-                    } else {
-                        extra_fields[extra_fields_count].strval[0] = '\0';
-                    }
-                    extra_fields_count++;
-                    ESP_LOGI(TAG, "PARSED: %s (0x%02X): %s%lu (offset %d -> %d)", 
-                             bms_idcodes[i].name, id, is_ascii ? strval : "", 
-                             is_ascii ? 0 : (unsigned long)value, extra_offset, extra_offset + 1 + bytes);
-                    extra_offset += 1 + bytes;
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) {
-                if (debug_logging) ESP_LOGW(TAG, "UNKNOWN field ID 0x%02X at offset %d, skipping", id, extra_offset);
-                extra_offset++;
-            }
-        } else {
-            // Skip this duplicate field
-            if (debug_logging) ESP_LOGW(TAG, "SKIPPING duplicate field ID 0x%02X", id);
-            int found = 0;
-            for (size_t i = 0; i < BMS_IDCODES_COUNT; ++i) {
-                if (bms_idcodes[i].id == id) {
-                    if (debug_logging) ESP_LOGI(TAG, "Skipping %d bytes for duplicate 0x%02X", bms_idcodes[i].byte_len, id);
-                    extra_offset += 1 + bms_idcodes[i].byte_len;
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) {
-                ESP_LOGW(TAG, "Unknown duplicate field 0x%02X, advancing by 1 byte", id);
-                extra_offset++;
-            }
-        }
+        ESP_LOGI(TAG, "Parsed values - Voltage: %.2fV, Current: %.2fA, Percentage: %d%%", 
+                 current_input_data.example_voltage, current_input_data.example_current, current_input_data.example_percentage);
+    } else {
+        ESP_LOGW(TAG, "Insufficient data for parsing (%d bytes)", len);
+        return;
     }
     
-    ESP_LOGI(TAG, "=== EXTRA FIELDS PARSING COMPLETE ===");
-    ESP_LOGI(TAG, "Parsed %d unique extra fields", extra_fields_count);
-
-    if (debug_logging) printf("----------------------------------------\n"); // Separator for console output.
-
-    // After parsing all data and populating current_bms_data
-    // Call function to publish data via MQTT
-    // This check ensures we only try to publish if we have some valid cell data
-    if (debug_logging) printf("[DEBUG] Checking publish condition: num_cells=%d\n", current_bms_data.num_cells);
-    if (current_bms_data.num_cells > 0) {
-        if (debug_logging) printf("[DEBUG] Calling publish_bms_data_mqtt...\n");
-        publish_bms_data_mqtt(&current_bms_data);
-        if (debug_logging) printf("[DEBUG] publish_bms_data_mqtt returned\n");
-    } else {
-        if (debug_logging) printf("[DEBUG] Not publishing - no valid cell data\n");
-    }
+    ESP_LOGI(TAG, "Input data parsing complete");
+    
+    // After parsing data, publish via MQTT
+    publish_input_data_mqtt(&current_input_data);
 }
 
 
-// Reads data from the BMS. This function handles potential UART echo and then parses the response.
-static void read_bms_data() {
-    uint8_t data_buf[UART_BUF_SIZE]; // Buffer to store raw data from UART.
-    int length = 0; // Variable to store the length of data available in UART RX buffer.
-
-    ESP_LOGI(TAG, "Attempting to read BMS data...");
-    // Wait for a period to allow the BMS to respond.
-    // JK BMS response time is typically <100ms for "Read All Data".
-    // A 300ms delay provides a safety margin.
-    vTaskDelay(pdMS_TO_TICKS(300)); 
+// Template function to read input data
+// PutInputCodeHere: Replace this function with your specific input reading logic
+static void read_input_data() {
+    ESP_LOGI(TAG, "Reading input data...");
     
-    // Feed TWDT after the delay to prevent timeout during BMS communication
-    esp_task_wdt_reset(); 
-
-    // Get the number of bytes available in the UART RX buffer.
-    ESP_ERROR_CHECK(uart_get_buffered_data_len(UART_NUM, (size_t*)&length));
+    // Initialize input data fields to default/invalid values
+    current_input_data.example_voltage = 0.0f;
+    current_input_data.example_current = 0.0f;
+    current_input_data.example_percentage = 0;
     
-    if (length > 0) { // If data is available
-        ESP_LOGI(TAG, "%d bytes available in UART buffer.", length);
-        if (length > UART_BUF_SIZE) {
-            ESP_LOGW(TAG, "Incoming data (%d bytes) larger than local buffer (%d bytes). Truncating.", length, UART_BUF_SIZE);
-            length = UART_BUF_SIZE; // Limit read to buffer size to prevent overflow.
-        }
-        
-        // Read the data from UART RX buffer into data_buf.
-        // pdMS_TO_TICKS(200): Timeout for the read operation.
-        int read_len = uart_read_bytes(UART_NUM, data_buf, length, pdMS_TO_TICKS(200)); 
-        
-        // Feed TWDT after UART read operation
-        esp_task_wdt_reset(); 
-        
-        if (read_len > 0) {
-            ESP_LOGI(TAG, "Successfully read %d bytes from UART:", read_len);
-            ESP_LOG_BUFFER_HEX(TAG, data_buf, read_len); // Log the raw received data in hex.
-
-            uint8_t* data_to_parse = data_buf; // Pointer to the start of data to be parsed.
-            int len_to_parse = read_len;       // Length of data to be parsed.
-
-            // Check if the received data starts with the command that was sent (UART echo).
-            // This can happen if TX and RX lines are connected in a way that allows echo.
-            if (len_to_parse >= sizeof(bms_read_all_cmd) &&
-                memcmp(data_to_parse, bms_read_all_cmd, sizeof(bms_read_all_cmd)) == 0) {
-                ESP_LOGI(TAG, "Command echo detected at the beginning of the read buffer. Skipping %d echo bytes.", (int)sizeof(bms_read_all_cmd));
-                // Advance the pointer and reduce the length to skip the echo.
-                data_to_parse += sizeof(bms_read_all_cmd);
-                len_to_parse -= sizeof(bms_read_all_cmd);
-
-                if (len_to_parse <= 0) {
-                    ESP_LOGW(TAG, "Buffer contained only echo, no further data for BMS response.");
-                    // uart_flush_input(UART_NUM); // Flush, though it will be flushed later anyway.
-                    return; // No actual BMS response data left.
-                }
-                ESP_LOGI(TAG, "Processing remaining %d bytes for BMS response:", len_to_parse);
-                ESP_LOG_BUFFER_HEX(TAG, data_to_parse, len_to_parse); // Log the data after skipping echo.
-            }
-
-            // If there's still data left after potential echo removal, parse it.
-            if (len_to_parse > 0) { 
-                parse_and_print_bms_data(data_to_parse, len_to_parse);
-            } else {
-                ESP_LOGW(TAG, "No data left to parse after potential echo removal.");
-            }
-
-        } else { // uart_read_bytes returned 0 or error.
-            ESP_LOGW(TAG, "Failed to read data from UART buffer after length check (uart_read_bytes returned %d).", read_len);
-        }
-        // Flush the UART RX buffer to remove any remaining or old data.
-        // This is important to prevent interference with the next read cycle.
-        uart_flush_input(UART_NUM);
-        ESP_LOGI(TAG, "UART RX buffer flushed.");
-    } else { // No data available in UART buffer after the initial wait.
-        ESP_LOGW(TAG, "No data available from BMS after %dms wait.", 300);
-    }
+    // PutInputCodeHere: Add your specific input reading code here
+    // Examples:
+    // - Read from UART/Serial
+    // - Read from I2C sensors
+    // - Read from SPI devices
+    // - Read from GPIO pins
+    // - Read from ADC
+    // - Parse received network data
+    // - etc.
+    
+    // Example placeholder values (replace with actual reading logic):
+    current_input_data.example_voltage = 12.5f;    // Replace with actual sensor reading
+    current_input_data.example_current = 2.3f;     // Replace with actual sensor reading
+    current_input_data.example_percentage = 85;    // Replace with actual calculation
+    
+    ESP_LOGI(TAG, "Input data reading complete");
+    
+    // After reading all data, publish via MQTT
+    publish_input_data_mqtt(&current_input_data);
 }
 
 // Place these functions before app_main so they are visible to it
@@ -920,44 +418,44 @@ void load_sample_interval_from_nvs() {
     }
 }
 
-void load_bms_topic_from_nvs() {
+void load_data_topic_from_nvs() {
     ESP_LOGI(TAG, "=== LOADING BMS TOPIC FROM NVS ===");
-    ESP_LOGI(TAG, "Initial bms_topic value: '%s'", bms_topic);
+    ESP_LOGI(TAG, "Initial data_topic value: '%s'", data_topic);
     
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
     ESP_LOGI(TAG, "NVS open result: %s", esp_err_to_name(err));
     
     if (err == ESP_OK) {
-        size_t topic_len = sizeof(bms_topic);
-        ESP_LOGI(TAG, "Attempting to read NVS key '%s', buffer size: %d", NVS_KEY_BMS_TOPIC, topic_len);
+        size_t topic_len = sizeof(data_topic);
+        ESP_LOGI(TAG, "Attempting to read NVS key '%s', buffer size: %d", NVS_KEY_DATA_TOPIC, topic_len);
         
-        esp_err_t get_err = nvs_get_str(nvs_handle, NVS_KEY_BMS_TOPIC, bms_topic, &topic_len);
+        esp_err_t get_err = nvs_get_str(nvs_handle, NVS_KEY_DATA_TOPIC, data_topic, &topic_len);
         ESP_LOGI(TAG, "NVS get_str result: %s", esp_err_to_name(get_err));
         
         if (get_err != ESP_OK) {
-            ESP_LOGW(TAG, "BMS topic not found in NVS (error: %s), using default: BMS/JKBMS", esp_err_to_name(get_err));
-            strncpy(bms_topic, "BMS/JKBMS", sizeof(bms_topic)-1);
-            bms_topic[sizeof(bms_topic)-1] = '\0';
-            esp_err_t set_err = nvs_set_str(nvs_handle, NVS_KEY_BMS_TOPIC, bms_topic);
-            ESP_LOGI(TAG, "Default BMS topic save result: %s", esp_err_to_name(set_err));
+            ESP_LOGW(TAG, "Data topic not found in NVS (error: %s), using default: BMS/JKBMS", esp_err_to_name(get_err));
+            strncpy(data_topic, "Data/Template", sizeof(data_topic)-1);
+            data_topic[sizeof(data_topic)-1] = '\0';
+            esp_err_t set_err = nvs_set_str(nvs_handle, NVS_KEY_DATA_TOPIC, data_topic);
+            ESP_LOGI(TAG, "Default Data topic save result: %s", esp_err_to_name(set_err));
             nvs_commit(nvs_handle);
         } else {
-            ESP_LOGI(TAG, "Successfully loaded BMS topic from NVS: '%s' (length: %d)", bms_topic, topic_len);
+            ESP_LOGI(TAG, "Successfully loaded Data topic from NVS: '%s' (length: %d)", data_topic, topic_len);
         }
         nvs_close(nvs_handle);
     } else {
-        ESP_LOGE(TAG, "Failed to open NVS for BMS topic: %s", esp_err_to_name(err));
-        strncpy(bms_topic, "BMS/JKBMS", sizeof(bms_topic)-1);
-        bms_topic[sizeof(bms_topic)-1] = '\0';
+        ESP_LOGE(TAG, "Failed to open NVS for Data topic: %s", esp_err_to_name(err));
+        strncpy(data_topic, "Data/Template", sizeof(data_topic)-1);
+        data_topic[sizeof(data_topic)-1] = '\0';
     }
-    ESP_LOGI(TAG, "=== FINAL BMS TOPIC: '%s' ===", bms_topic);
+    ESP_LOGI(TAG, "=== FINAL BMS TOPIC: '%s' ===", data_topic);
 }
 
-void save_bms_topic_to_nvs(const char *topic) {
+void save_data_topic_to_nvs(const char *topic) {
     nvs_handle_t nvs_handle;
     if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) == ESP_OK) {
-        nvs_set_str(nvs_handle, NVS_KEY_BMS_TOPIC, topic);
+        nvs_set_str(nvs_handle, NVS_KEY_DATA_TOPIC, topic);
         nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
     }
@@ -1098,7 +596,7 @@ esp_err_t params_json_get_handler(httpd_req_t *req) {
     // Debug: Show counter after reloading from NVS
     ESP_LOGI(TAG, "*** DEBUG: watchdog_reset_counter after reload: %lu ***", watchdog_reset_counter);
     
-    ESP_LOGI(TAG, "Current bms_topic variable: '%s'", bms_topic);
+    ESP_LOGI(TAG, "Current data_topic variable: '%s'", data_topic);
     ESP_LOGI(TAG, "Current wifi_ssid: '%s'", wifi_ssid);
     ESP_LOGI(TAG, "Current mqtt_broker_url: '%s'", mqtt_broker_url);
     ESP_LOGI(TAG, "Current sample_interval_ms: %ld", sample_interval_ms);
@@ -1106,8 +604,8 @@ esp_err_t params_json_get_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "Current pack_name: '%s'", pack_name);
     
     char buf[512];
-    snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\",\"password\":\"%s\",\"mqtt_url\":\"%s\",\"sample_interval\":%ld,\"bms_topic\":\"%s\",\"watchdog_reset_counter\":%lu,\"pack_name\":\"%s\"}", 
-             wifi_ssid, wifi_pass, mqtt_broker_url, sample_interval_ms, bms_topic, watchdog_reset_counter, pack_name);
+    snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\",\"password\":\"%s\",\"mqtt_url\":\"%s\",\"sample_interval\":%ld,\"data_topic\":\"%s\",\"watchdog_reset_counter\":%lu,\"pack_name\":\"%s\"}", 
+             wifi_ssid, wifi_pass, mqtt_broker_url, sample_interval_ms, data_topic, watchdog_reset_counter, pack_name);
     ESP_LOGI(TAG, "Sending params.json response: %s", buf);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -1180,29 +678,29 @@ esp_err_t params_update_post_handler(httpd_req_t *req) {
     nvs_set_str(nvs_handle, WIFI_NVS_KEY_PASS, wifi_pass);
     nvs_set_str(nvs_handle, MQTT_NVS_KEY_URL, mqtt_broker_url);
     nvs_set_i64(nvs_handle, NVS_KEY_SAMPLE_INTERVAL, (int64_t)sample_interval_ms);
-    // Handle BMS topic
+    // Handle Data topic
     ESP_LOGI(TAG, "=== PROCESSING BMS TOPIC ===");
-    ESP_LOGI(TAG, "Current bms_topic before update: '%s'", bms_topic);
+    ESP_LOGI(TAG, "Current data_topic before update: '%s'", data_topic);
     
-    char bms_topic_in[41] = "";
-    char bms_topic_dec[41];
-    char *bms_topic_ptr = strstr(buf, "bms_topic=");
-    if (bms_topic_ptr) {
-        sscanf(bms_topic_ptr + 10, "%40[^&]", bms_topic_in);
-        ESP_LOGI(TAG, "Raw BMS topic from form: '%s'", bms_topic_in);
+    char data_topic_in[41] = "";
+    char data_topic_dec[41];
+    char *data_topic_ptr = strstr(buf, "data_topic=");
+    if (data_topic_ptr) {
+        sscanf(data_topic_ptr + 10, "%40[^&]", data_topic_in);
+        ESP_LOGI(TAG, "Raw Data topic from form: '%s'", data_topic_in);
         
-        url_decode(bms_topic_dec, bms_topic_in, sizeof(bms_topic_dec));
-        ESP_LOGI(TAG, "URL decoded BMS topic: '%s'", bms_topic_dec);
+        url_decode(data_topic_dec, data_topic_in, sizeof(data_topic_dec));
+        ESP_LOGI(TAG, "URL decoded Data topic: '%s'", data_topic_dec);
         
-        strncpy(bms_topic, bms_topic_dec, sizeof(bms_topic)-1);
-        bms_topic[sizeof(bms_topic)-1] = '\0';
-        ESP_LOGI(TAG, "BMS topic updated to: '%s'", bms_topic);
+        strncpy(data_topic, data_topic_dec, sizeof(data_topic)-1);
+        data_topic[sizeof(data_topic)-1] = '\0';
+        ESP_LOGI(TAG, "Data topic updated to: '%s'", data_topic);
     } else {
-        ESP_LOGW(TAG, "No bms_topic found in request data: %s", buf);
+        ESP_LOGW(TAG, "No data_topic found in request data: %s", buf);
     }
     
-    esp_err_t nvs_err = nvs_set_str(nvs_handle, NVS_KEY_BMS_TOPIC, bms_topic);
-    ESP_LOGI(TAG, "Saved BMS topic '%s' to NVS with key '%s': %s", bms_topic, NVS_KEY_BMS_TOPIC, esp_err_to_name(nvs_err));
+    esp_err_t nvs_err = nvs_set_str(nvs_handle, NVS_KEY_DATA_TOPIC, data_topic);
+    ESP_LOGI(TAG, "Saved Data topic '%s' to NVS with key '%s': %s", data_topic, NVS_KEY_DATA_TOPIC, esp_err_to_name(nvs_err));
     ESP_LOGI(TAG, "=== BMS TOPIC PROCESSING COMPLETE ===");
     
     // Handle Pack Name
@@ -1856,7 +1354,7 @@ void ap_config_task(void *pvParameter) {
     load_wifi_config_from_nvs();
     load_mqtt_config_from_nvs();
     load_sample_interval_from_nvs();
-    load_bms_topic_from_nvs();
+    load_data_topic_from_nvs();
     load_watchdog_counter_from_nvs();
     load_pack_name_from_nvs();
     
@@ -1867,7 +1365,7 @@ void ap_config_task(void *pvParameter) {
     ESP_LOGI(TAG, "WiFi SSID: %s", wifi_ssid);
     ESP_LOGI(TAG, "WiFi PASS: %s", wifi_pass);
     ESP_LOGI(TAG, "MQTT Broker URL: %s", mqtt_broker_url);
-    ESP_LOGI(TAG, "BMS Topic: %s", bms_topic);
+    ESP_LOGI(TAG, "BMS Topic: %s", data_topic);
     ESP_LOGI(TAG, "Sample interval (ms): %ld", sample_interval_ms);
     ESP_LOGI(TAG, "Watchdog reset counter: %lu", watchdog_reset_counter);
     ESP_LOGI(TAG, "Pack name: '%s'", pack_name);
@@ -1988,7 +1486,7 @@ void app_main(void) {
     load_wifi_config_from_nvs();
     load_mqtt_config_from_nvs();
     load_sample_interval_from_nvs();
-    load_bms_topic_from_nvs();
+    load_data_topic_from_nvs();
     load_watchdog_counter_from_nvs();
     load_pack_name_from_nvs();
     
@@ -1999,7 +1497,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "WiFi SSID: %s", wifi_ssid);
     ESP_LOGI(TAG, "WiFi PASS: %s", wifi_pass);
     ESP_LOGI(TAG, "MQTT Broker URL: %s", mqtt_broker_url);
-    ESP_LOGI(TAG, "BMS Topic: %s", bms_topic);
+    ESP_LOGI(TAG, "BMS Topic: %s", data_topic);
     ESP_LOGI(TAG, "Sample interval (ms): %ld", sample_interval_ms);
     ESP_LOGI(TAG, "Watchdog reset counter: %lu", watchdog_reset_counter);
     ESP_LOGI(TAG, "Pack name: %s", pack_name);
@@ -2026,7 +1524,7 @@ void app_main(void) {
     }
 
     // Buffer to attempt to read and discard UART echo. Size of the command sent.
-    uint8_t echo_buf[sizeof(bms_read_all_cmd)]; 
+    uint8_t echo_buf[sizeof(template_read_cmd)]; 
 
     // Main loop to periodically send command and read response from BMS.
     while (1) {
@@ -2077,21 +1575,22 @@ void app_main(void) {
         ESP_LOGD(TAG, "[MAIN LOOP] After reset mqtt_publish_success");
 
         if (debug_logging) {
-            ESP_LOGI(TAG, "Sending '%s' command to BMS...", "Read All Data");
+            ESP_LOGI(TAG, "Sending '%s' command to device...", "Read Data");
         }
-        send_bms_command(bms_read_all_cmd, sizeof(bms_read_all_cmd));
+        // PutInputCodeHere: Replace with your actual command sending logic
+        send_device_command(template_read_cmd, sizeof(template_read_cmd));
         ESP_LOGD(TAG, "[MAIN LOOP] After send_bms_command");
 
-        int echo_read_len = uart_read_bytes(UART_NUM, echo_buf, sizeof(bms_read_all_cmd), pdMS_TO_TICKS(20));
+        int echo_read_len = uart_read_bytes(UART_NUM, echo_buf, sizeof(template_read_cmd), pdMS_TO_TICKS(20));
         ESP_LOGD(TAG, "[MAIN LOOP] After uart_read_bytes for echo");
 
-        if (echo_read_len == sizeof(bms_read_all_cmd)) {
+        if (echo_read_len == sizeof(template_read_cmd)) {
             if (debug_logging) {
                 ESP_LOGI(TAG, "Successfully read and discarded %d echo bytes.", echo_read_len);
             }
         } else if (echo_read_len > 0) {
             if (debug_logging) {
-                ESP_LOGW(TAG, "Partially read %d echo bytes (expected %d). The rest might be in the main read or BMS response is very fast.", echo_read_len, (int)sizeof(bms_read_all_cmd));
+                ESP_LOGW(TAG, "Partially read %d echo bytes (expected %d). The rest might be in the main read or device response is very fast.", echo_read_len, (int)sizeof(template_read_cmd));
             }
         } else {
             if (debug_logging) {
@@ -2100,7 +1599,7 @@ void app_main(void) {
         }
         ESP_LOGD(TAG, "[MAIN LOOP] After echo read handling");
 
-        read_bms_data();
+        read_input_data();
         ESP_LOGD(TAG, "[MAIN LOOP] After read_bms_data");
 
         if (debug_logging) {
@@ -2351,8 +1850,8 @@ static char* get_software_version(void) {
 
 // Placeholder for publishing BMS data
 // This function will be expanded to create and send the two JSON messages
-void publish_bms_data_mqtt(const bms_data_t *bms_data_ptr) {
-    if (debug_logging) printf("[DEBUG] publish_bms_data_mqtt() called with num_cells=%d\n", bms_data_ptr->num_cells);
+void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
+    if (debug_logging) printf("[DEBUG] publish_input_data_mqtt() called\n");
     
     if (!mqtt_client) {
         ESP_LOGE(TAG, "MQTT client not initialized!");
@@ -2360,16 +1859,17 @@ void publish_bms_data_mqtt(const bms_data_t *bms_data_ptr) {
         return;
     }
 
-    ESP_LOGI(TAG, "Preparing to publish BMS data via MQTT...");
+    ESP_LOGI(TAG, "Preparing to publish input data via MQTT...");
 
-    // --- Create JSON with temperature sensors added ---
+    // PutOutputFormattingForMqttHere: Replace this JSON creation with your specific format
+    // Create JSON with your specific data structure
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         ESP_LOGE(TAG, "Failed to create cJSON root object.");
         return;
     }
 
-    // Add processor metrics data first
+    // Add processor metrics data first (system information)
     cJSON *processor_root = cJSON_CreateObject();
     if (processor_root) {
         // WiFi RSSI as percentage
@@ -2394,210 +1894,25 @@ void publish_bms_data_mqtt(const bms_data_t *bms_data_ptr) {
         cJSON_AddItemToObject(root, "processor", processor_root);
     }
 
-    // Add pack data with temperature sensors and enhanced system info
-    cJSON *pack_root = cJSON_CreateObject();
-    if (pack_root) {
-        // Add pack name first in the pack object
-        cJSON_AddStringToObject(pack_root, "packName", pack_name);
+    // PutOutputFormattingForMqttHere: Add your specific data formatting here
+    // Example: Add your input data to the JSON
+    cJSON *data_root = cJSON_CreateObject();
+    if (data_root) {
+        // Add pack name 
+        cJSON_AddStringToObject(data_root, "deviceName", pack_name);
         
-        // Core pack data
-        cJSON_AddNumberToObject(pack_root, "packV", bms_data_ptr->pack_voltage);
-        cJSON_AddNumberToObject(pack_root, "packA", bms_data_ptr->pack_current);
-        cJSON_AddNumberToObject(pack_root, "packNumberOfCells", bms_data_ptr->num_cells);
-        cJSON_AddNumberToObject(pack_root, "packSOC", bms_data_ptr->soc_percent);
+        // Example data fields (replace with your actual data structure)
+        cJSON_AddNumberToObject(data_root, "exampleVoltage", input_data_ptr->example_voltage);
+        cJSON_AddNumberToObject(data_root, "exampleCurrent", input_data_ptr->example_current);
+        cJSON_AddNumberToObject(data_root, "examplePercentage", input_data_ptr->example_percentage);
         
-        // Add cell voltage statistics
-        cJSON_AddNumberToObject(pack_root, "packMinCellV", bms_data_ptr->min_cell_voltage);
-        cJSON_AddNumberToObject(pack_root, "packMaxCellV", bms_data_ptr->max_cell_voltage);
-        cJSON_AddNumberToObject(pack_root, "packCellVDelta", bms_data_ptr->cell_voltage_delta);
+        // PutOutputFormattingForMqttHere: Add more fields as needed
+        // Examples:
+        // cJSON_AddNumberToObject(data_root, "yourField1", input_data_ptr->your_field1);
+        // cJSON_AddStringToObject(data_root, "yourField2", input_data_ptr->your_field2);
+        // cJSON_AddBoolToObject(data_root, "yourField3", input_data_ptr->your_field3);
         
-        // Add temperature sensors
-        cJSON *temp_sensors = cJSON_CreateObject();
-        if (temp_sensors) {
-            cJSON_AddNumberToObject(temp_sensors, "NTC0", bms_data_ptr->mosfet_temp);
-            cJSON_AddNumberToObject(temp_sensors, "NTC1", bms_data_ptr->probe1_temp);
-            cJSON_AddNumberToObject(temp_sensors, "NTC2", bms_data_ptr->probe2_temp);
-            cJSON_AddItemToObject(pack_root, "tempSensorValues", temp_sensors);
-        }
-        
-        // Add system status information
-        cJSON *system_status = cJSON_CreateObject();
-        if (system_status) {
-            // Look for MOSFET status fields
-            for (int i = 0; i < extra_fields_count; ++i) {
-                if (extra_fields[i].id == 0xAB) { // Charging MOS switch
-                    cJSON_AddNumberToObject(system_status, "chargeMosfetStatus", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xAC) { // Discharge MOS switch
-                    cJSON_AddNumberToObject(system_status, "dischargeMosfetStatus", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0x9A) { // Active equalization switch
-                    cJSON_AddNumberToObject(system_status, "balancingActive", extra_fields[i].value);
-                }
-            }
-            cJSON_AddItemToObject(pack_root, "systemStatus", system_status);
-        }
-        
-        // Add system configuration
-        cJSON *system_config = cJSON_CreateObject();
-        if (system_config) {
-            for (int i = 0; i < extra_fields_count; ++i) {
-                if (extra_fields[i].id == 0xAA) { // Battery Capacity Settings
-                    cJSON_AddNumberToObject(system_config, "batteryCapacityAh", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA9) { // Number of battery strings
-                    cJSON_AddNumberToObject(system_config, "numberOfStrings", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xAF) { // Battery type
-                    cJSON_AddNumberToObject(system_config, "batteryType", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB1) { // Low Capacity Alarm Value
-                    cJSON_AddNumberToObject(system_config, "lowCapacityAlarm", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0x99) { // Equalizing opening differential
-                    cJSON_AddNumberToObject(system_config, "equalizingDifferentialMv", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xAD) { // Current Calibration
-                    cJSON_AddNumberToObject(system_config, "currentCalibrationMa", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB3) { // Special Charger Switch
-                    cJSON_AddNumberToObject(system_config, "specialChargerSwitch", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB0) { // Sleep Wait Time
-                    cJSON_AddNumberToObject(system_config, "sleepWaitTimeSeconds", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB8) { // Start Current Calibration
-                    cJSON_AddNumberToObject(system_config, "startCurrentCalibration", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xAE) { // Protective Board 1 Address
-                    cJSON_AddNumberToObject(system_config, "protectiveBoardAddress", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB2 && extra_fields[i].is_ascii) { // Modify parameter password
-                    cJSON_AddStringToObject(system_config, "modifyParameterPassword", extra_fields[i].strval);
-                }
-            }
-            cJSON_AddItemToObject(pack_root, "systemConfig", system_config);
-        }
-        
-        // Add temperature protection parameters
-        cJSON *temp_protection = cJSON_CreateObject();
-        if (temp_protection) {
-            for (int i = 0; i < extra_fields_count; ++i) {
-                if (extra_fields[i].id == 0x9B) { // Power tube temperature protection
-                    cJSON_AddNumberToObject(temp_protection, "powerTubeTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0x9F) { // Temperature protection in battery box
-                    cJSON_AddNumberToObject(temp_protection, "batteryBoxTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA0) { // Recovery value 2 of battery in box
-                    cJSON_AddNumberToObject(temp_protection, "batteryBoxTempRecovery2C", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA1) { // Battery temperature difference
-                    cJSON_AddNumberToObject(temp_protection, "batteryTempDifferenceC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA2) { // Battery charging 2 high temp protection
-                    cJSON_AddNumberToObject(temp_protection, "chargingHighTempProtection2C", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA3) { // High temp protection for charging
-                    cJSON_AddNumberToObject(temp_protection, "chargingHighTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA4) { // High temp protection for discharge
-                    cJSON_AddNumberToObject(temp_protection, "dischargeHighTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA5) { // Charging cryoprotection
-                    cJSON_AddNumberToObject(temp_protection, "chargingLowTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA6) { // Recovery value 2 of charge cryoprotection
-                    cJSON_AddNumberToObject(temp_protection, "chargingLowTempRecovery2C", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA7) { // Discharge cryoprotection
-                    cJSON_AddNumberToObject(temp_protection, "dischargeLowTempProtectionC", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xA8) { // Discharge low temp protection recovery
-                    cJSON_AddNumberToObject(temp_protection, "dischargeLowTempRecoveryC", extra_fields[i].value);
-                }
-            }
-            cJSON_AddItemToObject(pack_root, "temperatureProtection", temp_protection);
-        }
-        
-        // Add system information
-        cJSON *system_info = cJSON_CreateObject();
-        if (system_info) {
-            for (int i = 0; i < extra_fields_count; ++i) {
-                if (extra_fields[i].id == 0xB4 && extra_fields[i].is_ascii) { // Device ID Code
-                    cJSON_AddStringToObject(system_info, "deviceId", extra_fields[i].strval);
-                } else if (extra_fields[i].id == 0xB5 && extra_fields[i].is_ascii) { // Date of production
-                    cJSON_AddStringToObject(system_info, "productionDate", extra_fields[i].strval);
-                } else if (extra_fields[i].id == 0xB7 && extra_fields[i].is_ascii) { // Software Version
-                    cJSON_AddStringToObject(system_info, "softwareVersion", extra_fields[i].strval);
-                } else if (extra_fields[i].id == 0xB6) { // System working time
-                    cJSON_AddNumberToObject(system_info, "workingTimeMinutes", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xB9) { // Actual battery capacity
-                    cJSON_AddNumberToObject(system_info, "actualCapacityAh", extra_fields[i].value);
-                } else if (extra_fields[i].id == 0xBA && extra_fields[i].is_ascii) { // Factory ID
-                    cJSON_AddStringToObject(system_info, "factoryId", extra_fields[i].strval);
-                }
-            }
-            cJSON_AddItemToObject(pack_root, "systemInfo", system_info);
-        }
-        
-        // Add expanded extra fields (comprehensive BMS system data)
-        // Include ALL available extra fields to maximize data coverage
-        for (int i = 0; i < extra_fields_count && i < MAX_EXTRA_FIELDS; ++i) { // Include all available fields
-            const char *field_name = NULL;
-            for (size_t j = 0; j < BMS_IDCODES_COUNT; ++j) {
-                if (bms_idcodes[j].id == extra_fields[i].id) {
-                    field_name = bms_idcodes[j].name;
-                    break;
-                }
-            }
-            if (field_name) {
-                // Include ALL BMS fields for maximum data coverage
-                uint8_t field_id = extra_fields[i].id;
-                // Include all known BMS field IDs from the protocol definition
-                // Core pack data: 0x82, 0x83, 0x84, 0x85 (already handled above in structured sections)
-                // Balance & protection: 0x8F, 0x90, 0x91, 0x93, 0x94, 0x95, 0x96, 0x97
-                // Configuration: 0x99, 0x9A, 0x9B, 0x9F, 0xA0-0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF
-                // System info: 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA
-                // Extended fields: Any other fields that may be present
-                if (field_id == 0x82 || field_id == 0x83 || field_id == 0x84 || field_id == 0x85 || 
-                    field_id == 0x8F || field_id == 0x90 || field_id == 0x91 || field_id == 0x93 || 
-                    field_id == 0x94 || field_id == 0x95 || field_id == 0x96 || field_id == 0x97 ||
-                    field_id == 0x99 || field_id == 0x9A || field_id == 0x9B || field_id == 0x9F ||
-                    (field_id >= 0xA0 && field_id <= 0xA8) || field_id == 0xA9 || field_id == 0xAA || 
-                    field_id == 0xAB || field_id == 0xAC || field_id == 0xAD || field_id == 0xAE || field_id == 0xAF ||
-                    field_id == 0xB0 || field_id == 0xB1 || field_id == 0xB2 || field_id == 0xB3 ||
-                    field_id == 0xB4 || field_id == 0xB5 || field_id == 0xB6 || field_id == 0xB7 ||
-                    field_id == 0xB8 || field_id == 0xB9 || field_id == 0xBA ||
-                    // Include any other fields that might be present (for maximum coverage)
-                    field_id >= 0x80) {
-                    
-                    char sanitized[64];
-                    int si = 0;
-                    for (int k = 0; field_name[k] && si < 63; ++k) {
-                        char c = field_name[k];
-                        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-                            sanitized[si++] = c;
-                        } else if (c == ' ' || c == '-' || c == '/' || c == '%') {
-                            sanitized[si++] = '_';
-                        }
-                    }
-                    sanitized[si] = '\0';
-                    
-                    if (extra_fields[i].is_ascii && extra_fields[i].strval[0]) {
-                        cJSON_AddStringToObject(pack_root, sanitized, extra_fields[i].strval);
-                    } else {
-                        cJSON_AddNumberToObject(pack_root, sanitized, extra_fields[i].value);
-                    }
-                }
-            }
-        }
-        
-        // Add raw extra fields section for comprehensive debugging and analysis
-        cJSON *raw_extra_fields = cJSON_CreateObject();
-        if (raw_extra_fields) {
-            char field_key[16];
-            for (int i = 0; i < extra_fields_count && i < MAX_EXTRA_FIELDS; ++i) {
-                snprintf(field_key, sizeof(field_key), "field_0x%02X", extra_fields[i].id);
-                if (extra_fields[i].is_ascii && extra_fields[i].strval[0]) {
-                    cJSON_AddStringToObject(raw_extra_fields, field_key, extra_fields[i].strval);
-                } else {
-                    cJSON_AddNumberToObject(raw_extra_fields, field_key, extra_fields[i].value);
-                }
-            }
-            cJSON_AddItemToObject(pack_root, "rawExtraFields", raw_extra_fields);
-        }
-        cJSON_AddItemToObject(root, "pack", pack_root);
-    }
-
-    // Add cells data (volts only)
-    cJSON *cells_root = cJSON_CreateObject();
-    if (cells_root) {
-        char cell_v_key[16];
-        for (int i = 0; i < bms_data_ptr->num_cells; i++) {
-            float cell_v = bms_data_ptr->cell_voltages[i];
-            snprintf(cell_v_key, sizeof(cell_v_key), "cell%dV", i);
-            cJSON_AddNumberToObject(cells_root, cell_v_key, cell_v);
-        }
-        cJSON_AddItemToObject(root, "cells", cells_root);
+        cJSON_AddItemToObject(root, "data", data_root);
     }
 
     // Publish as a single topic
@@ -2606,8 +1921,8 @@ void publish_bms_data_mqtt(const bms_data_t *bms_data_ptr) {
         ESP_LOGE(TAG, "Failed to print combined cJSON to string.");
     } else {
         char topic[64];
-        // Use bms_topic directly without any BMS prefix
-        snprintf(topic, sizeof(topic), "%s", bms_topic);
+        // Use data_topic directly (you may want to rename this variable for your use case)
+        snprintf(topic, sizeof(topic), "%s", data_topic);
         if (debug_logging) printf("[DEBUG] About to publish to topic: %s\n", topic);
         if (debug_logging) printf("[DEBUG] JSON payload length: %d\n", strlen(json_string));
         esp_mqtt_client_publish(mqtt_client, topic, json_string, 0, 1, 0);

@@ -140,7 +140,7 @@
             </label>
         </div>
         <form id="paramsForm">
-            <label>Pack Name:
+            <label>Mqtt Topic:
                 <input type="text" name="pack_name" id="pack_name" maxlength="63" required>
             </label>
             <label>WiFi SSID:
@@ -155,8 +155,8 @@
             <label>Sample Interval (ms):
                 <input type="number" name="sample_interval" id="sample_interval" min="100" max="86400000" required>
             </label>
-            <label>BMS Topic:
-                <input type="text" name="bms_topic" id="bms_topic" maxlength="40" required>
+            <label>Data Topic:
+                <input type="text" name="data_topic" id="data_topic" maxlength="40" required>
             </label>
             <label>Watchdog Reset Counter:
                 <input type="number" name="watchdog_reset_counter" id="watchdog_reset_counter" min="0" max="4294967295" required>
@@ -229,7 +229,7 @@
             document.getElementById('password').value = cfg.password || '';
             document.getElementById('mqtt_url').value = cfg.mqtt_url || '';
             document.getElementById('sample_interval').value = cfg.sample_interval || 5000;
-            document.getElementById('bms_topic').value = cfg.bms_topic || 'JKBMS';
+            document.getElementById('data_topic').value = cfg.data_topic || 'Data/Template';
             document.getElementById('pack_name').value = cfg.pack_name || 'Set in Parameters';
             document.getElementById('watchdog_reset_counter').value = cfg.watchdog_reset_counter || 0;
         }).catch(err => {
