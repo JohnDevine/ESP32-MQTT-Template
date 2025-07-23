@@ -140,9 +140,6 @@
             </label>
         </div>
         <form id="paramsForm">
-            <label>Mqtt Topic:
-                <input type="text" name="pack_name" id="pack_name" maxlength="63" required>
-            </label>
             <label>WiFi SSID:
                 <input type="text" name="ssid" id="ssid" placeholder="Enter WiFi network name" required>
             </label>
@@ -229,8 +226,7 @@
             document.getElementById('password').value = cfg.password || '';
             document.getElementById('mqtt_url').value = cfg.mqtt_url || '';
             document.getElementById('sample_interval').value = cfg.sample_interval || 5000;
-            document.getElementById('data_topic').value = cfg.data_topic || 'Data/Template';
-            document.getElementById('pack_name').value = cfg.pack_name || 'Set in Parameters';
+            document.getElementById('data_topic').value = cfg.data_topic || 'sensors/light/data';
             document.getElementById('watchdog_reset_counter').value = cfg.watchdog_reset_counter || 0;
         }).catch(err => {
             console.log('Error fetching params.json: ' + err.message);

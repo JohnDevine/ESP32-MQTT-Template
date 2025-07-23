@@ -1,30 +1,28 @@
 /*
- * ESP32 MQTT TEMPLATE PROJECT
+ * ESP32 MQTT Weather Station with BH1750 Light Sensor
  * 
- * This is a template version of the ESP32MQTTBase project. It has been modified
- * to remove specific BMS (Battery Management System) code and replace it with
- * generic placeholders for easy customization.
+ * This project implements an ESP32-based weather monitoring station that reads
+ * ambient light data from a BH1750 digital light sensor via I2C and publishes
+ * the measurements to an MQTT broker.
  * 
- * TEMPLATE PLACEHOLDERS:
- * - Search for "PutInputCodeHere" to find places where you should add your
- *   specific input reading, parsing, and communication code.
- * - Search for "PutOutputFormattingForMqttHere" to find places where you should
- *   customize the MQTT output formatting for your data structure.
- * 
- * RETAINED FEATURES:
- * - WiFi configuration with captive portal
- * - MQTT connectivity with reconnection handling
- * - Web-based configuration interface
- * - OTA (Over-The-Air) firmware updates
- * - System monitoring and watchdog functionality
+ * FEATURES:
+ * - BH1750 digital light sensor reading via I2C (GPIO21/SDA, GPIO22/SCL)
+ * - MQTT connectivity with automatic reconnection handling
+ * - WiFi configuration with captive portal for easy setup
+ * - Web-based configuration interface for all parameters
+ * - Watchdog timer for system reliability
  * - Persistent configuration storage (NVS)
+ * - Automatic version management and build automation
  * 
- * TO USE THIS TEMPLATE:
- * 1. Replace input_data_t struct with your data structure
- * 2. Implement your communication protocol and data reading logic
- * 3. Customize the MQTT JSON output format
- * 4. Update default configuration values as needed
- * 5. Test with your specific hardware and data sources
+ * HARDWARE REQUIREMENTS:
+ * - ESP32 development board
+ * - BH1750 digital light sensor (I2C interface)
+ * - Pull-up resistors for I2C lines (typically 4.7kΩ)
+ * 
+ * DATA OUTPUT:
+ * - Light intensity in lux (floating point)
+ * - Sensor status and processor metrics
+ * - JSON format via MQTT for integration with home automation systems
  */
 
 /*
@@ -54,10 +52,10 @@
 #include "freertos/FreeRTOS.h"
 // FreeRTOS task management
 #include "freertos/task.h"
-// ESP32 UART driver
-#include "driver/uart.h"
 // ESP32 GPIO driver
 #include "driver/gpio.h"
+// ESP32 I2C master driver for BH1750 sensor (new driver)
+#include "driver/i2c_master.h"
 // ESP-IDF logging library
 #include "esp_log.h"
 // Standard C string manipulation library (for memcmp)
@@ -74,14 +72,19 @@
 #include "esp_spiffs.h"
 #include "esp_system.h"
 #include "esp_mac.h"
+#include "esp_efuse.h"
 #include "esp_http_server.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include "esp_chip_info.h"
 #include "esp_ota_ops.h"
 #include "esp_flash.h"
 #include "spi_flash_mmap.h"
+#include "project_version.h"  // Single source of truth for version
 #include "esp_partition.h"
 #include "esp_http_server.h"
 
@@ -107,30 +110,43 @@ static bool debug_logging = false;
 #define NVS_KEY_SAMPLE_INTERVAL "sample_interval"
 #define NVS_KEY_DATA_TOPIC "data_topic"
 #define NVS_KEY_WATCHDOG_COUNTER "watchdog_cnt"
-#define NVS_KEY_PACK_NAME "pack_name"
 #define DEFAULT_WIFI_SSID "yourSSID"
 #define DEFAULT_WIFI_PASS "yourpassword"
-#define DEFAULT_MQTT_BROKER_URL "mqtt://192.168.1.100"
+// Temporary: Using public test broker - change this to your local broker once network is confirmed
+#define DEFAULT_MQTT_BROKER_URL "mqtt://test.mosquitto.org:1883"
+// Original: #define DEFAULT_MQTT_BROKER_URL "mqtt://192.168.1.100"
 #define DEFAULT_SAMPLE_INTERVAL 5000L
-#define DEFAULT_PACK_NAME "Set in Parameters"
 
 static char wifi_ssid[33] = DEFAULT_WIFI_SSID;
 static char wifi_pass[65] = DEFAULT_WIFI_PASS;
 static char mqtt_broker_url[128] = DEFAULT_MQTT_BROKER_URL;
-char data_topic[41] = "Data/Template";  // Remove static to make it globally accessible
+char data_topic[41] = "Data/BH1750";  // Default MQTT topic for BH1750 sensor data
 static long sample_interval_ms = DEFAULT_SAMPLE_INTERVAL;
 static uint32_t watchdog_reset_counter = 0;  // Watchdog timer reset counter
-static char pack_name[64] = DEFAULT_PACK_NAME;  // Pack name field
 
-// Define the UART peripheral number to be used (UART2 in this case)
-#define UART_NUM UART_NUM_2
-// Define the GPIO pin for UART Transmit (TX)
-#define UART_TX_PIN GPIO_NUM_17
-// Define the GPIO pin for UART Receive (RX)
-#define UART_RX_PIN GPIO_NUM_16
 #define BOOT_BTN_GPIO GPIO_NUM_0
-// Define the size of the UART buffer for receiving data
-#define UART_BUF_SIZE 1024
+
+// I2C configuration for BH1750 light sensor (new I2C master driver)
+#define I2C_MASTER_SCL_IO           GPIO_NUM_22    // SCL GPIO pin
+#define I2C_MASTER_SDA_IO           GPIO_NUM_21    // SDA GPIO pin
+#define I2C_MASTER_FREQ_HZ          100000         // I2C master clock frequency (100kHz)
+#define I2C_MASTER_TIMEOUT_MS       1000
+
+// BH1750 sensor configuration
+#define BH1750_ADDR                 0x23           // BH1750 I2C address (ADDR pin low)
+#define BH1750_CMD_POWER_ON         0x01           // Power on command
+#define BH1750_CMD_POWER_DOWN       0x00           // Power down command
+#define BH1750_CMD_RESET            0x07           // Reset command
+#define BH1750_CMD_CONT_HIGH_RES    0x10           // Continuous H-Resolution mode
+#define BH1750_CMD_CONT_HIGH_RES2   0x11           // Continuous H-Resolution mode2
+#define BH1750_CMD_CONT_LOW_RES     0x13           // Continuous L-Resolution mode
+#define BH1750_CMD_ONE_HIGH_RES     0x20           // One Time H-Resolution mode
+#define BH1750_CMD_ONE_HIGH_RES2    0x21           // One Time H-Resolution mode2
+#define BH1750_CMD_ONE_LOW_RES      0x23           // One Time L-Resolution mode
+
+// I2C master bus and device handles (new I2C driver)
+static i2c_master_bus_handle_t i2c_bus_handle;
+static i2c_master_dev_handle_t bh1750_dev_handle;
 
 // Tag used for logging messages from this module
 static const char *TAG = "DATA_READER";
@@ -140,21 +156,18 @@ static const char *TAG = "DATA_READER";
 
 // MQTT Configuration
 #define MQTT_BROKER_URL "mqtt://192.168.1.5"
-#define MQTT_TOPIC_PACK "NodeJKBMS2/pack"
-#define MQTT_TOPIC_CELLS "NodeJKBMS2/cells"
 
 // Global variable for MQTT client
 static esp_mqtt_client_handle_t mqtt_client;
 static int wifi_retry_num = 0;
 
-// Template data structure for input data
+// BH1750 sensor data structure
 // Replace this with your specific data structure
 typedef struct {
     // PutInputCodeHere: Define your data structure fields here
-    // Example fields (replace with your actual data fields):
-    float example_voltage;
-    float example_current;
-    uint8_t example_percentage;
+    // BH1750 light sensor data
+    float sunlight;  // Light intensity in lux
+    bool sensor_ok;  // Sensor status flag
     // Add your specific data fields here
 } input_data_t;
 
@@ -179,7 +192,6 @@ static input_data_t current_input_data;
 // Forward declarations for NVS functions
 static void load_watchdog_counter_from_nvs(void);
 static void save_watchdog_counter_to_nvs(void);
-static void load_pack_name_from_nvs(void);
 
 // Forward declaration for DNS hijack task
 void dns_hijack_task(void *pvParameter);
@@ -195,43 +207,19 @@ static esp_err_t sysinfo_json_get_handler(httpd_req_t *req);
 static esp_err_t ota_firmware_handler(httpd_req_t *req);
 static esp_err_t ota_filesystem_handler(httpd_req_t *req);
 
-// Initializes the UART communication peripheral.
-void init_uart();
-// Sends a command to the device via UART.
-void send_device_command(const uint8_t* cmd, size_t len);
-// Reads data from the BMS via UART. This function is static, meaning it's only visible within this file.
-static void read_bms_data(); 
-// Template function to parse input data
-// PutInputCodeHere: Replace this function with your specific data parsing logic
-void parse_input_data(const uint8_t *data, int len);
-
 // New forward declarations for Wi-Fi and MQTT
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data);
 static void mqtt_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data);
+static bool test_mqtt_broker_connectivity(const char* broker_url);
+static bool check_wifi_connection(void);
 void wifi_init_sta(void);
 static void mqtt_app_start(void);
-void publish_input_data_mqtt(const input_data_t *input_data_ptr); // Template publish function
+void publish_input_data_mqtt(const input_data_t *input_data_ptr); // Publish sensor data to MQTT
 
 // Forward declaration for DNS hijack task
 void dns_hijack_task(void *pvParameter);
-
-// Constant array holding the "Read All Data" command bytes to be sent to the JK BMS.
-// This command requests a comprehensive status update from the BMS.
-// Template constants and commands
-// PutInputCodeHere: Define your protocol constants here
-// Examples:
-// const uint8_t your_read_command[] = {0x01, 0x02, 0x03, 0x04};
-// const uint8_t your_config_command[] = {0x05, 0x06, 0x07, 0x08};
-
-// Template command example (replace with your actual command)
-const uint8_t template_read_cmd[] = {
-    0xAA, 0x55,           // Start bytes (example)
-    0x01,                 // Command ID (example)
-    0x00,                 // Data length (example)
-    0xBB                  // End byte (example)
-};
 
 // Helper function to extract a 16-bit unsigned integer from a buffer.
 // Assumes big-endian byte order (most significant byte first).
@@ -253,112 +241,118 @@ uint8_t unpack_u8(const uint8_t *buffer, int offset) {
     return buffer[offset];
 }
 
-// Initializes the UART peripheral for communication with the BMS.
-void init_uart() {
-    // UART configuration structure
-    uart_config_t uart_config = {
-        .baud_rate = 115200,                // Baud rate for serial communication
-        .data_bits = UART_DATA_8_BITS,      // 8 data bits per frame
-        .parity    = UART_PARITY_DISABLE,   // No parity bit
-        .stop_bits = UART_STOP_BITS_1,      // 1 stop bit
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, // No hardware flow control
-        .source_clk = UART_SCLK_APB,        // Clock source for UART (APB clock)
+// I2C Master initialization for BH1750 sensor (new I2C master driver)
+static esp_err_t init_i2c_master(void) {
+    // Configure I2C master bus
+    i2c_master_bus_config_t i2c_bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = I2C_NUM_0,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-    // Install UART driver, and get the queue.
-    // UART_NUM: UART port number
-    // UART_BUF_SIZE * 2: RX buffer size (doubled for safety)
-    // 0: TX buffer size (0 means driver will not allocate TX buffer, direct write)
-    // 0, NULL: No event queue
-    // 0: Interrupt allocation flags
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0));
-    // Configure UART parameters
-    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
-    // Set UART pins for TX, RX, RTS, CTS
-    // UART_TX_PIN: TX pin number
-    // UART_RX_PIN: RX pin number
-    // UART_PIN_NO_CHANGE: RTS pin (not used)
-    // UART_PIN_NO_CHANGE: CTS pin (not used)
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    ESP_LOGI(TAG, "UART initialized");
-}
 
-// Sends a command (array of bytes) to the device via UART.
-// cmd: Pointer to the byte array containing the command.
-// len: Length of the command in bytes.
-void send_device_command(const uint8_t* cmd, size_t len) {
-    // Write data to UART.
-    // (const char*)cmd: Cast command buffer to char pointer as expected by the function.
-    int txBytes = uart_write_bytes(UART_NUM, (const char*)cmd, len);
-    ESP_LOGI(TAG, "Wrote %d bytes", txBytes); // Log the number of bytes written.
-}
-
-// Parses the raw data received from the BMS and prints it.
-// data: Pointer to the buffer containing the raw data from BMS.
-// len: Length of the data in bytes.
-// Template function to parse input data  
-// PutInputCodeHere: Replace this function with your specific data parsing logic
-void parse_input_data(const uint8_t *data, int len) {
-    ESP_LOGI(TAG, "Parsing input data (%d bytes)...", len);
-    
-    // PutInputCodeHere: Add your specific data parsing code here
-    // Examples:
-    // - Parse protocol frames (like Modbus, CAN, etc.)
-    // - Validate checksums
-    // - Extract specific data fields
-    // - Convert raw values to meaningful units
-    // - Perform data validation
-    // - etc.
-    
-    // Example placeholder parsing (replace with actual parsing logic):
-    if (len >= 4) {
-        // Example: Parse first 4 bytes as different data types
-        current_input_data.example_voltage = (float)((data[0] << 8) | data[1]) / 100.0f;  // Convert to voltage
-        current_input_data.example_current = (float)((data[2] << 8) | data[3]) / 100.0f;  // Convert to current  
-        current_input_data.example_percentage = len > 4 ? data[4] : 50;  // Use 5th byte if available
-        
-        ESP_LOGI(TAG, "Parsed values - Voltage: %.2fV, Current: %.2fA, Percentage: %d%%", 
-                 current_input_data.example_voltage, current_input_data.example_current, current_input_data.example_percentage);
-    } else {
-        ESP_LOGW(TAG, "Insufficient data for parsing (%d bytes)", len);
-        return;
+    esp_err_t err = i2c_new_master_bus(&i2c_bus_config, &i2c_bus_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus creation failed: %s", esp_err_to_name(err));
+        return err;
     }
-    
-    ESP_LOGI(TAG, "Input data parsing complete");
-    
-    // After parsing data, publish via MQTT
-    publish_input_data_mqtt(&current_input_data);
+
+    // Configure BH1750 device
+    i2c_device_config_t bh1750_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = BH1750_ADDR,
+        .scl_speed_hz = I2C_MASTER_FREQ_HZ,
+    };
+
+    err = i2c_master_bus_add_device(i2c_bus_handle, &bh1750_cfg, &bh1750_dev_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750 device add failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "I2C master initialized successfully");
+    return ESP_OK;
 }
 
+// BH1750 sensor initialization (new I2C master driver)
+static esp_err_t bh1750_init(void) {
+    esp_err_t ret;
+    uint8_t cmd_data;
 
-// Template function to read input data
+    // Power on the sensor
+    cmd_data = BH1750_CMD_POWER_ON;
+    ret = i2c_master_transmit(bh1750_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750 power on failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10)); // Wait for power on
+
+    // Set measurement mode to continuous high resolution
+    cmd_data = BH1750_CMD_CONT_HIGH_RES;
+    ret = i2c_master_transmit(bh1750_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750 mode set failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "BH1750 sensor initialized successfully");
+    vTaskDelay(pdMS_TO_TICKS(120)); // Wait for first measurement (120ms for high res mode)
+    return ESP_OK;
+}
+
+// Read light intensity from BH1750 sensor (new I2C master driver)
+static esp_err_t bh1750_read_light(float *lux) {
+    esp_err_t ret;
+    uint8_t data[2];
+
+    // Read 2 bytes of data from BH1750
+    ret = i2c_master_receive(bh1750_dev_handle, data, 2, I2C_MASTER_TIMEOUT_MS);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750 read failed: %s", esp_err_to_name(ret));
+        *lux = -1.0f; // Error value
+        return ret;
+    }
+
+    // Convert the raw data to lux
+    uint16_t raw_data = (data[0] << 8) | data[1];
+    *lux = raw_data / 1.2f;  // Resolution: 1 lux per 1.2 counts
+
+    ESP_LOGD(TAG, "BH1750 raw data: %d, lux: %.1f", raw_data, *lux);
+    return ESP_OK;
+}
+
+// BH1750 sensor reading function
 // PutInputCodeHere: Replace this function with your specific input reading logic
-static void read_input_data() {
-    ESP_LOGI(TAG, "Reading input data...");
+static bool read_input_data() {
+    ESP_LOGI(TAG, "Reading BH1750 light sensor data...");
     
     // Initialize input data fields to default/invalid values
-    current_input_data.example_voltage = 0.0f;
-    current_input_data.example_current = 0.0f;
-    current_input_data.example_percentage = 0;
+    current_input_data.sunlight = 0.0f;
+    current_input_data.sensor_ok = false;
     
-    // PutInputCodeHere: Add your specific input reading code here
-    // Examples:
-    // - Read from UART/Serial
-    // - Read from I2C sensors
-    // - Read from SPI devices
-    // - Read from GPIO pins
-    // - Read from ADC
-    // - Parse received network data
-    // - etc.
+    // PutInputCodeHere: Read from BH1750 I2C sensor
+    float lux_value;
+    esp_err_t ret = bh1750_read_light(&lux_value);
     
-    // Example placeholder values (replace with actual reading logic):
-    current_input_data.example_voltage = 12.5f;    // Replace with actual sensor reading
-    current_input_data.example_current = 2.3f;     // Replace with actual sensor reading
-    current_input_data.example_percentage = 85;    // Replace with actual calculation
-    
-    ESP_LOGI(TAG, "Input data reading complete");
-    
-    // After reading all data, publish via MQTT
-    publish_input_data_mqtt(&current_input_data);
+    if (ret == ESP_OK && lux_value >= 0) {
+        current_input_data.sunlight = lux_value;
+        current_input_data.sensor_ok = true;
+        ESP_LOGI(TAG, "BH1750 reading successful: %.1f lux", lux_value);
+        
+        // Publish MQTT data only on successful sensor read
+        publish_input_data_mqtt(&current_input_data);
+        ESP_LOGI(TAG, "MQTT data published after successful sensor read");
+        return true;
+    } else {
+        current_input_data.sunlight = -1.0f;  // Error value
+        current_input_data.sensor_ok = false;
+        ESP_LOGE(TAG, "BH1750 reading failed - skipping MQTT publish");
+        return false;
+    }
 }
 
 // Place these functions before app_main so they are visible to it
@@ -419,7 +413,7 @@ void load_sample_interval_from_nvs() {
 }
 
 void load_data_topic_from_nvs() {
-    ESP_LOGI(TAG, "=== LOADING BMS TOPIC FROM NVS ===");
+    ESP_LOGI(TAG, "=== LOADING DATA TOPIC FROM NVS ===");
     ESP_LOGI(TAG, "Initial data_topic value: '%s'", data_topic);
     
     nvs_handle_t nvs_handle;
@@ -434,8 +428,8 @@ void load_data_topic_from_nvs() {
         ESP_LOGI(TAG, "NVS get_str result: %s", esp_err_to_name(get_err));
         
         if (get_err != ESP_OK) {
-            ESP_LOGW(TAG, "Data topic not found in NVS (error: %s), using default: BMS/JKBMS", esp_err_to_name(get_err));
-            strncpy(data_topic, "Data/Template", sizeof(data_topic)-1);
+            ESP_LOGW(TAG, "Data topic not found in NVS (error: %s), using default: Data/BH1750", esp_err_to_name(get_err));
+            strncpy(data_topic, "Data/BH1750", sizeof(data_topic)-1);
             data_topic[sizeof(data_topic)-1] = '\0';
             esp_err_t set_err = nvs_set_str(nvs_handle, NVS_KEY_DATA_TOPIC, data_topic);
             ESP_LOGI(TAG, "Default Data topic save result: %s", esp_err_to_name(set_err));
@@ -446,10 +440,10 @@ void load_data_topic_from_nvs() {
         nvs_close(nvs_handle);
     } else {
         ESP_LOGE(TAG, "Failed to open NVS for Data topic: %s", esp_err_to_name(err));
-        strncpy(data_topic, "Data/Template", sizeof(data_topic)-1);
+        strncpy(data_topic, "Data/BH1750", sizeof(data_topic)-1);
         data_topic[sizeof(data_topic)-1] = '\0';
     }
-    ESP_LOGI(TAG, "=== FINAL BMS TOPIC: '%s' ===", data_topic);
+    ESP_LOGI(TAG, "=== FINAL DATA TOPIC: '%s' ===", data_topic);
 }
 
 void save_data_topic_to_nvs(const char *topic) {
@@ -510,57 +504,8 @@ void save_watchdog_counter_to_nvs() {
     }
 }
 
-void load_pack_name_from_nvs() {
-    ESP_LOGI(TAG, "=== LOADING PACK NAME FROM NVS ===");
-    ESP_LOGI(TAG, "Initial pack_name value: '%s'", pack_name);
-    
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-    ESP_LOGI(TAG, "NVS open result: %s", esp_err_to_name(err));
-    
-    if (err == ESP_OK) {
-        size_t name_len = sizeof(pack_name);
-        ESP_LOGI(TAG, "Attempting to read NVS key '%s', buffer size: %d", NVS_KEY_PACK_NAME, name_len);
-        
-        esp_err_t get_err = nvs_get_str(nvs_handle, NVS_KEY_PACK_NAME, pack_name, &name_len);
-        ESP_LOGI(TAG, "NVS get_str result: %s", esp_err_to_name(get_err));
-        
-        if (get_err != ESP_OK) {
-            ESP_LOGW(TAG, "Pack name not found in NVS (error: %s), using default: %s", esp_err_to_name(get_err), DEFAULT_PACK_NAME);
-            strncpy(pack_name, DEFAULT_PACK_NAME, sizeof(pack_name)-1);
-            pack_name[sizeof(pack_name)-1] = '\0';
-            esp_err_t set_err = nvs_set_str(nvs_handle, NVS_KEY_PACK_NAME, pack_name);
-            ESP_LOGI(TAG, "Default pack name save result: %s", esp_err_to_name(set_err));
-            nvs_commit(nvs_handle);
-        } else {
-            ESP_LOGI(TAG, "Successfully loaded pack name from NVS: '%s' (length: %d)", pack_name, name_len);
-        }
-        nvs_close(nvs_handle);
-    } else {
-        ESP_LOGE(TAG, "Failed to open NVS for pack name: %s", esp_err_to_name(err));
-        strncpy(pack_name, DEFAULT_PACK_NAME, sizeof(pack_name)-1);
-        pack_name[sizeof(pack_name)-1] = '\0';
-    }
-    ESP_LOGI(TAG, "=== FINAL PACK NAME: '%s' ===", pack_name);
-}
 
-void save_pack_name_to_nvs(const char *name) {
-    ESP_LOGI(TAG, "=== SAVING PACK NAME TO NVS ===");
-    ESP_LOGI(TAG, "Saving pack_name: '%s'", name);
-    
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
-    if (err == ESP_OK) {
-        esp_err_t set_err = nvs_set_str(nvs_handle, NVS_KEY_PACK_NAME, name);
-        ESP_LOGI(TAG, "NVS set_str result: %s", esp_err_to_name(set_err));
-        if (set_err == ESP_OK) {
-            nvs_commit(nvs_handle);
-        }
-        nvs_close(nvs_handle);
-    } else {
-        ESP_LOGE(TAG, "Failed to open NVS for saving pack name: %s", esp_err_to_name(err));
-    }
-}
+
 
 // SPIFFS init
 void init_spiffs() {
@@ -601,11 +546,10 @@ esp_err_t params_json_get_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "Current mqtt_broker_url: '%s'", mqtt_broker_url);
     ESP_LOGI(TAG, "Current sample_interval_ms: %ld", sample_interval_ms);
     ESP_LOGI(TAG, "Current watchdog_reset_counter: %lu", watchdog_reset_counter);
-    ESP_LOGI(TAG, "Current pack_name: '%s'", pack_name);
     
     char buf[512];
-    snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\",\"password\":\"%s\",\"mqtt_url\":\"%s\",\"sample_interval\":%ld,\"data_topic\":\"%s\",\"watchdog_reset_counter\":%lu,\"pack_name\":\"%s\"}", 
-             wifi_ssid, wifi_pass, mqtt_broker_url, sample_interval_ms, data_topic, watchdog_reset_counter, pack_name);
+    snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\",\"password\":\"%s\",\"mqtt_url\":\"%s\",\"sample_interval\":%ld,\"data_topic\":\"%s\",\"watchdog_reset_counter\":%lu}", 
+             wifi_ssid, wifi_pass, mqtt_broker_url, sample_interval_ms, data_topic, watchdog_reset_counter);
     ESP_LOGI(TAG, "Sending params.json response: %s", buf);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -661,7 +605,7 @@ esp_err_t params_update_post_handler(httpd_req_t *req) {
     sscanf(strstr(buf, "ssid=")+5, "%32[^&]", ssid);
     sscanf(strstr(buf, "password=")+9, "%64[^&]", pass);
     sscanf(strstr(buf, "mqtt_url=")+9, "%127[^&]", mqtt_url);
-    sscanf(strstr(buf, "sample_interval=")+16, "%ld", &interval);
+    sscanf(strstr(buf, "sample_interval=")+15, "%ld", &interval);  // Fixed: "sample_interval=" is 15 chars, not 16
     // Decode URL-encoded values
     char ssid_dec[33], pass_dec[65], url_dec[128];
     url_decode(ssid_dec, ssid, sizeof(ssid_dec));
@@ -679,14 +623,14 @@ esp_err_t params_update_post_handler(httpd_req_t *req) {
     nvs_set_str(nvs_handle, MQTT_NVS_KEY_URL, mqtt_broker_url);
     nvs_set_i64(nvs_handle, NVS_KEY_SAMPLE_INTERVAL, (int64_t)sample_interval_ms);
     // Handle Data topic
-    ESP_LOGI(TAG, "=== PROCESSING BMS TOPIC ===");
+    ESP_LOGI(TAG, "=== PROCESSING DATA TOPIC ===");
     ESP_LOGI(TAG, "Current data_topic before update: '%s'", data_topic);
     
     char data_topic_in[41] = "";
     char data_topic_dec[41];
     char *data_topic_ptr = strstr(buf, "data_topic=");
     if (data_topic_ptr) {
-        sscanf(data_topic_ptr + 10, "%40[^&]", data_topic_in);
+        sscanf(data_topic_ptr + 11, "%40[^&]", data_topic_in);  // Fixed: "data_topic=" is 11 chars, not 10
         ESP_LOGI(TAG, "Raw Data topic from form: '%s'", data_topic_in);
         
         url_decode(data_topic_dec, data_topic_in, sizeof(data_topic_dec));
@@ -701,32 +645,9 @@ esp_err_t params_update_post_handler(httpd_req_t *req) {
     
     esp_err_t nvs_err = nvs_set_str(nvs_handle, NVS_KEY_DATA_TOPIC, data_topic);
     ESP_LOGI(TAG, "Saved Data topic '%s' to NVS with key '%s': %s", data_topic, NVS_KEY_DATA_TOPIC, esp_err_to_name(nvs_err));
-    ESP_LOGI(TAG, "=== BMS TOPIC PROCESSING COMPLETE ===");
+    ESP_LOGI(TAG, "=== DATA TOPIC PROCESSING COMPLETE ===");
     
-    // Handle Pack Name
-    ESP_LOGI(TAG, "=== PROCESSING PACK NAME ===");
-    ESP_LOGI(TAG, "Current pack_name before update: '%s'", pack_name);
-    
-    char pack_name_in[64] = "";
-    char pack_name_dec[64];
-    char *pack_name_ptr = strstr(buf, "pack_name=");
-    if (pack_name_ptr) {
-        sscanf(pack_name_ptr + 10, "%63[^&]", pack_name_in);
-        ESP_LOGI(TAG, "Raw pack name from form: '%s'", pack_name_in);
-        
-        url_decode(pack_name_dec, pack_name_in, sizeof(pack_name_dec));
-        ESP_LOGI(TAG, "URL decoded pack name: '%s'", pack_name_dec);
-        
-        strncpy(pack_name, pack_name_dec, sizeof(pack_name)-1);
-        pack_name[sizeof(pack_name)-1] = '\0';
-        ESP_LOGI(TAG, "Pack name updated to: '%s'", pack_name);
-    } else {
-        ESP_LOGW(TAG, "No pack_name found in request data: %s", buf);
-    }
-    
-    esp_err_t pack_name_nvs_err = nvs_set_str(nvs_handle, NVS_KEY_PACK_NAME, pack_name);
-    ESP_LOGI(TAG, "Saved pack name '%s' to NVS with key '%s': %s", pack_name, NVS_KEY_PACK_NAME, esp_err_to_name(pack_name_nvs_err));
-    ESP_LOGI(TAG, "=== PACK NAME PROCESSING COMPLETE ===");
+    ESP_LOGI(TAG, "=== PARAMETER UPDATE PROCESSING COMPLETE ===");
     
     // Handle Watchdog Reset Counter
     ESP_LOGI(TAG, "=== PROCESSING WATCHDOG RESET COUNTER ===");
@@ -848,23 +769,8 @@ static esp_err_t sysinfo_json_get_handler(httpd_req_t *req) {
     #endif
     const char *idf_ver = esp_get_idf_version();
     
-    // Read version from version.txt file in SPIFFS
-    // Note: This file (data/version.txt) must be kept in sync with the master 
-    // version file (version.txt in project root). The master file serves as 
-    // the source of truth, while this file is deployed to the ESP32 for 
-    // runtime display in the web interface.
-    char version_str[16] = "1.3.0"; // Default fallback - update when master version changes
-    FILE *version_file = fopen("/spiffs/version.txt", "r");
-    if (version_file) {
-        if (fgets(version_str, sizeof(version_str), version_file)) {
-            // Remove trailing newline if present
-            char *newline = strchr(version_str, '\n');
-            if (newline) *newline = '\0';
-            char *carriage_return = strchr(version_str, '\r');
-            if (carriage_return) *carriage_return = '\0';
-        }
-        fclose(version_file);
-    }
+    // Use version from single source of truth (project_version.h)
+    const char *version_str = PROJECT_VERSION;
     
     esp_reset_reason_t reason = esp_reset_reason();
     const char *reason_str = "Unknown";
@@ -1356,7 +1262,6 @@ void ap_config_task(void *pvParameter) {
     load_sample_interval_from_nvs();
     load_data_topic_from_nvs();
     load_watchdog_counter_from_nvs();
-    load_pack_name_from_nvs();
     
     // Debug: Show watchdog counter after loading from NVS
     ESP_LOGI(TAG, "*** DEBUG: watchdog_reset_counter after NVS load (AP mode): %lu ***", watchdog_reset_counter);
@@ -1365,10 +1270,9 @@ void ap_config_task(void *pvParameter) {
     ESP_LOGI(TAG, "WiFi SSID: %s", wifi_ssid);
     ESP_LOGI(TAG, "WiFi PASS: %s", wifi_pass);
     ESP_LOGI(TAG, "MQTT Broker URL: %s", mqtt_broker_url);
-    ESP_LOGI(TAG, "BMS Topic: %s", data_topic);
+    ESP_LOGI(TAG, "Data Topic: %s", data_topic);
     ESP_LOGI(TAG, "Sample interval (ms): %ld", sample_interval_ms);
     ESP_LOGI(TAG, "Watchdog reset counter: %lu", watchdog_reset_counter);
-    ESP_LOGI(TAG, "Pack name: '%s'", pack_name);
     ESP_LOGI(TAG, "=== STARTING AP CONFIG MODE ===");
     
     // Note: esp_netif_init() and esp_event_loop_create_default() 
@@ -1477,8 +1381,22 @@ void app_main(void) {
         }
     }
 
-    // Initialize UART communication.
-    init_uart();
+    // Initialize I2C communication for BH1750 sensor
+    ESP_LOGI(TAG, "Initializing I2C master for BH1750 sensor...");
+    esp_err_t i2c_err = init_i2c_master();
+    if (i2c_err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C master initialization failed: %s", esp_err_to_name(i2c_err));
+    } else {
+        ESP_LOGI(TAG, "I2C master initialized successfully");
+        
+        // Initialize BH1750 sensor
+        esp_err_t bh1750_err = bh1750_init();
+        if (bh1750_err != ESP_OK) {
+            ESP_LOGE(TAG, "BH1750 sensor initialization failed: %s", esp_err_to_name(bh1750_err));
+        } else {
+            ESP_LOGI(TAG, "BH1750 sensor initialized successfully");
+        }
+    }
 
     // Debug: Show watchdog counter before loading from NVS
     ESP_LOGI(TAG, "*** DEBUG: watchdog_reset_counter before NVS load (normal mode): %lu ***", watchdog_reset_counter);
@@ -1488,7 +1406,6 @@ void app_main(void) {
     load_sample_interval_from_nvs();
     load_data_topic_from_nvs();
     load_watchdog_counter_from_nvs();
-    load_pack_name_from_nvs();
     
     // Debug: Show watchdog counter after loading from NVS
     ESP_LOGI(TAG, "*** DEBUG: watchdog_reset_counter after NVS load (normal mode): %lu ***", watchdog_reset_counter);
@@ -1497,10 +1414,9 @@ void app_main(void) {
     ESP_LOGI(TAG, "WiFi SSID: %s", wifi_ssid);
     ESP_LOGI(TAG, "WiFi PASS: %s", wifi_pass);
     ESP_LOGI(TAG, "MQTT Broker URL: %s", mqtt_broker_url);
-    ESP_LOGI(TAG, "BMS Topic: %s", data_topic);
+    ESP_LOGI(TAG, "Data Topic: %s", data_topic);
     ESP_LOGI(TAG, "Sample interval (ms): %ld", sample_interval_ms);
     ESP_LOGI(TAG, "Watchdog reset counter: %lu", watchdog_reset_counter);
-    ESP_LOGI(TAG, "Pack name: %s", pack_name);
     
     // Initialize SPIFFS for normal operation mode
     ESP_LOGI(TAG, "About to call init_spiffs() in normal mode...");
@@ -1518,20 +1434,18 @@ void app_main(void) {
         watchdog_enabled = true;
         last_successful_publish = xTaskGetTickCount();
         ESP_LOGI(TAG, "Software watchdog enabled with timeout: %lu ms (10× sample interval)", watchdog_timeout_ms);
+        ESP_LOGI(TAG, "WDT will reset ESP32 only if no MQTT data is published for %lu ms", watchdog_timeout_ms);
     } else {
         watchdog_enabled = false;
         ESP_LOGI(TAG, "Software watchdog inactive (timeout ≤10,000 ms, sample interval: %lu ms)", sample_interval_ms);
     }
 
-    // Buffer to attempt to read and discard UART echo. Size of the command sent.
-    uint8_t echo_buf[sizeof(template_read_cmd)]; 
-
-    // Main loop to periodically send command and read response from BMS.
+    // Main loop to periodically read sensor data and publish to MQTT.
     while (1) {
         ESP_LOGD(TAG, "[MAIN LOOP] Start iteration");
         esp_task_wdt_reset();
         
-        // Check software watchdog timeout
+        // Check software watchdog timeout - only triggers if no MQTT data published
         ESP_LOGD(TAG, "[MAIN LOOP] Check software watchdog");
         if (watchdog_enabled) {
             TickType_t current_time = xTaskGetTickCount();
@@ -1574,36 +1488,18 @@ void app_main(void) {
         mqtt_publish_success = false;
         ESP_LOGD(TAG, "[MAIN LOOP] After reset mqtt_publish_success");
 
-        if (debug_logging) {
-            ESP_LOGI(TAG, "Sending '%s' command to device...", "Read Data");
-        }
-        // PutInputCodeHere: Replace with your actual command sending logic
-        send_device_command(template_read_cmd, sizeof(template_read_cmd));
-        ESP_LOGD(TAG, "[MAIN LOOP] After send_bms_command");
-
-        int echo_read_len = uart_read_bytes(UART_NUM, echo_buf, sizeof(template_read_cmd), pdMS_TO_TICKS(20));
-        ESP_LOGD(TAG, "[MAIN LOOP] After uart_read_bytes for echo");
-
-        if (echo_read_len == sizeof(template_read_cmd)) {
-            if (debug_logging) {
-                ESP_LOGI(TAG, "Successfully read and discarded %d echo bytes.", echo_read_len);
-            }
-        } else if (echo_read_len > 0) {
-            if (debug_logging) {
-                ESP_LOGW(TAG, "Partially read %d echo bytes (expected %d). The rest might be in the main read or device response is very fast.", echo_read_len, (int)sizeof(template_read_cmd));
-            }
+        // Read sensor data and attempt to publish if successful
+        bool sensor_read_success = read_input_data();
+        
+        if (sensor_read_success) {
+            ESP_LOGD(TAG, "[MAIN LOOP] Sensor read successful, data will be published to MQTT");
         } else {
-            if (debug_logging) {
-                ESP_LOGI(TAG, "No echo read or timeout/error during dedicated echo read attempt (read %d bytes). Main read will handle if echo is present.", echo_read_len);
-            }
+            ESP_LOGW(TAG, "[MAIN LOOP] Sensor read failed, no MQTT data will be published this cycle");
         }
-        ESP_LOGD(TAG, "[MAIN LOOP] After echo read handling");
-
-        read_input_data();
-        ESP_LOGD(TAG, "[MAIN LOOP] After read_bms_data");
+        ESP_LOGD(TAG, "[MAIN LOOP] After read_input_data");
 
         if (debug_logging) {
-            ESP_LOGI(TAG, "Waiting %ld ms before next BMS read cycle...", sample_interval_ms);
+            ESP_LOGI(TAG, "Waiting %ld ms before next sensor read cycle...", sample_interval_ms);
         }
         if (sample_interval_ms > 5000) {
             uint32_t remaining_ms = sample_interval_ms;
@@ -1743,12 +1639,20 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
         printf("[MQTT] Connection error occurred!\n");
         if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-            ESP_LOGI(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
-            ESP_LOGI(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
-            printf("[MQTT] TCP Transport error - check network connectivity\n");
+            ESP_LOGE(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
+            ESP_LOGE(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
+            ESP_LOGE(TAG, "MQTT Broker URL: %s", mqtt_broker_url);
+            printf("[MQTT] TCP Transport error - check broker URL and network connectivity\n");
+            printf("[MQTT] Current broker: %s\n", mqtt_broker_url);
+            printf("[MQTT] Possible issues:\n");
+            printf("  1. Broker IP address not reachable\n");
+            printf("  2. Broker not running on specified port (default 1883)\n");
+            printf("  3. Network connectivity issues\n");
+            printf("  4. Firewall blocking connection\n");
         } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
-            ESP_LOGI(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
-            printf("[MQTT] Broker refused connection\n");
+            ESP_LOGE(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
+            printf("[MQTT] Broker refused connection (code: 0x%x)\n", event->error_handle->connect_return_code);
+            printf("[MQTT] Check broker configuration and authentication\n");
         } else {
             ESP_LOGW(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
             printf("[MQTT] Unknown error type: 0x%x\n", event->error_handle->error_type);
@@ -1760,20 +1664,155 @@ static void mqtt_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+// Check WiFi connection status
+static bool check_wifi_connection(void) {
+    wifi_ap_record_t ap_info;
+    esp_err_t ret = esp_wifi_sta_get_ap_info(&ap_info);
+    
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "✓ WiFi connected to: %s (RSSI: %d dBm)", ap_info.ssid, ap_info.rssi);
+        
+        // Get IP address
+        esp_netif_ip_info_t ip_info;
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (netif && esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+            ESP_LOGI(TAG, "✓ IP Address: " IPSTR, IP2STR(&ip_info.ip));
+            ESP_LOGI(TAG, "✓ Gateway: " IPSTR, IP2STR(&ip_info.gw));
+            printf("[WiFi] Connected - IP: " IPSTR "\n", IP2STR(&ip_info.ip));
+            return true;
+        }
+    }
+    
+    ESP_LOGE(TAG, "✗ WiFi not connected");
+    printf("[WiFi] Not connected - check WiFi credentials\n");
+    return false;
+}
+
+// Test MQTT broker connectivity before attempting to connect
+static bool test_mqtt_broker_connectivity(const char* broker_url) {
+    // Extract IP and port from broker URL
+    char ip_str[32];
+    int port = 1883;  // Default MQTT port
+    
+    // Simple URL parsing - expect format mqtt://ip:port or mqtt://ip
+    const char* ip_start = strstr(broker_url, "://");
+    if (ip_start == NULL) {
+        ESP_LOGE(TAG, "Invalid broker URL format: %s", broker_url);
+        return false;
+    }
+    ip_start += 3;  // Skip past "://"
+    
+    // Find port separator
+    const char* port_start = strchr(ip_start, ':');
+    if (port_start != NULL) {
+        // Extract IP
+        size_t ip_len = port_start - ip_start;
+        if (ip_len >= sizeof(ip_str)) ip_len = sizeof(ip_str) - 1;
+        strncpy(ip_str, ip_start, ip_len);
+        ip_str[ip_len] = '\0';
+        
+        // Extract port
+        port = atoi(port_start + 1);
+    } else {
+        // No port specified, copy IP and use default port
+        strncpy(ip_str, ip_start, sizeof(ip_str) - 1);
+        ip_str[sizeof(ip_str) - 1] = '\0';
+        
+        // Remove any trailing slash or path
+        char* slash = strchr(ip_str, '/');
+        if (slash) *slash = '\0';
+    }
+    
+    ESP_LOGI(TAG, "Testing connectivity to MQTT broker: %s:%d", ip_str, port);
+    
+    // Create a socket for testing
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create socket for connectivity test");
+        return false;
+    }
+    
+    // Set socket timeout
+    struct timeval timeout;
+    timeout.tv_sec = 5;  // 5 second timeout
+    timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    
+    // Setup address
+    struct sockaddr_in dest_addr;
+    dest_addr.sin_addr.s_addr = inet_addr(ip_str);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
+    
+    // Test connection
+    int connect_result = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+    close(sock);
+    
+    if (connect_result == 0) {
+        ESP_LOGI(TAG, "✓ Connectivity test successful - broker is reachable");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "✗ Connectivity test failed - broker not reachable (error: %d, errno: %d)", connect_result, errno);
+        printf("[MQTT] Broker connectivity test failed!\n");
+        printf("[MQTT] Broker: %s:%d\n", ip_str, port);
+        printf("[MQTT] Check your broker configuration:\n");
+        printf("  1. Verify broker IP address is correct\n");
+        printf("  2. Ensure broker is running and accessible\n");
+        printf("  3. Check network connectivity\n");
+        printf("  4. Verify port number (default MQTT: 1883)\n");
+        return false;
+    }
+}
+
 // MQTT Application Start
 static void mqtt_app_start(void) {
+    ESP_LOGI(TAG, "Starting MQTT client initialization...");
+    
+    // Check WiFi connection first
+    if (!check_wifi_connection()) {
+        ESP_LOGE(TAG, "WiFi not connected - cannot start MQTT client");
+        printf("[MQTT] WiFi connection required before MQTT\n");
+        return;
+    }
+    
+    // Test broker connectivity
+    if (!test_mqtt_broker_connectivity(mqtt_broker_url)) {
+        ESP_LOGE(TAG, "MQTT broker connectivity test failed - skipping MQTT client start");
+        printf("[MQTT] Broker not reachable - check configuration\n");
+        return;
+    }
+    
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = mqtt_broker_url,
+        .network.timeout_ms = 10000,           // 10 second timeout
+        .network.refresh_connection_after_ms = 20000,  // Refresh connection every 20s
+        .session.keepalive = 60,               // 60 second keepalive
+        .network.reconnect_timeout_ms = 10000, // 10 second reconnect timeout
+        .buffer.size = 1024,                   // 1KB buffer
+        .buffer.out_size = 1024,               // 1KB output buffer
     };
     // The event_handle field was removed from esp_mqtt_client_config_t in ESP-IDF v5.0.
     // Events are now registered globally for the client instance.
     // For older IDF: .event_handle = mqtt_event_handler,
 
+    ESP_LOGI(TAG, "Initializing MQTT client with broker: %s", mqtt_broker_url);
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+    if (mqtt_client == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize MQTT client");
+        return;
+    }
+    
     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
     esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(mqtt_client);
-    ESP_LOGI(TAG, "MQTT client started.");
+    
+    esp_err_t start_result = esp_mqtt_client_start(mqtt_client);
+    if (start_result != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(start_result));
+        return;
+    }
+    
+    ESP_LOGI(TAG, "MQTT client started successfully.");
 }
 
 // Helper functions for processor metrics
@@ -1820,35 +1859,41 @@ static float get_cpu_temperature(void) {
 }
 
 static char* get_software_version(void) {
-    static char version_str[16] = "0.0.0"; // Default fallback - indicates version file not read
+    static char version_str[32];
     static bool version_loaded = false;
     
     if (!version_loaded) {
-        ESP_LOGI(TAG, "Attempting to read version from /spiffs/version.txt");
-        FILE *version_file = fopen("/spiffs/version.txt", "r");
-        if (version_file) {
-            ESP_LOGI(TAG, "Version file opened successfully");
-            if (fgets(version_str, sizeof(version_str), version_file)) {
-                ESP_LOGI(TAG, "Read version string: '%s'", version_str);
-                // Remove trailing newline if present
-                char *newline = strchr(version_str, '\n');
-                if (newline) *newline = '\0';
-                char *carriage_return = strchr(version_str, '\r');
-                if (carriage_return) *carriage_return = '\0';
-                ESP_LOGI(TAG, "Cleaned version string: '%s'", version_str);
-            } else {
-                ESP_LOGE(TAG, "Failed to read from version file");
-            }
-            fclose(version_file);
-        } else {
-            ESP_LOGE(TAG, "Failed to open /spiffs/version.txt - file may not exist or SPIFFS not mounted");
-        }
+        // Use the CMake-generated version from project_version.h
+        ESP_LOGI(TAG, "Using CMake-generated version: %s", PROJECT_VERSION);
+        strncpy(version_str, PROJECT_VERSION, sizeof(version_str) - 1);
+        version_str[sizeof(version_str) - 1] = '\0';
         version_loaded = true;
     }
     return version_str;
 }
 
-// Placeholder for publishing BMS data
+static char* get_chip_id(void) {
+    static char chip_id_str[13]; // 6 bytes * 2 hex chars + null terminator
+    static bool chip_id_loaded = false;
+    
+    if (!chip_id_loaded) {
+        uint8_t mac[6];
+        esp_err_t ret = esp_efuse_mac_get_default(mac);
+        if (ret == ESP_OK) {
+            // Convert MAC address (last 6 bytes) to hex string
+            snprintf(chip_id_str, sizeof(chip_id_str), "%02X%02X%02X%02X%02X%02X", 
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else {
+            snprintf(chip_id_str, sizeof(chip_id_str), "UNKNOWN");
+            ESP_LOGE(TAG, "Failed to read chip ID: %s", esp_err_to_name(ret));
+        }
+        chip_id_loaded = true;
+        ESP_LOGI(TAG, "ESP32 Chip ID: %s", chip_id_str);
+    }
+    return chip_id_str;
+}
+
+// Function to publish sensor data to MQTT broker
 // This function will be expanded to create and send the two JSON messages
 void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
     if (debug_logging) printf("[DEBUG] publish_input_data_mqtt() called\n");
@@ -1888,6 +1933,10 @@ void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
         char *software_version = get_software_version();
         cJSON_AddStringToObject(processor_root, "SoftwareVersion", software_version);
         
+        // ESP32 Chip ID
+        char *chip_id = get_chip_id();
+        cJSON_AddStringToObject(processor_root, "ChipID", chip_id);
+        
         // Watchdog Restart Count
         cJSON_AddNumberToObject(processor_root, "WDTRestartCount", watchdog_reset_counter);
         
@@ -1895,22 +1944,16 @@ void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
     }
 
     // PutOutputFormattingForMqttHere: Add your specific data formatting here
-    // Example: Add your input data to the JSON
+    // BH1750 light sensor data
     cJSON *data_root = cJSON_CreateObject();
     if (data_root) {
-        // Add pack name 
-        cJSON_AddStringToObject(data_root, "deviceName", pack_name);
-        
-        // Example data fields (replace with your actual data structure)
-        cJSON_AddNumberToObject(data_root, "exampleVoltage", input_data_ptr->example_voltage);
-        cJSON_AddNumberToObject(data_root, "exampleCurrent", input_data_ptr->example_current);
-        cJSON_AddNumberToObject(data_root, "examplePercentage", input_data_ptr->example_percentage);
+        // BH1750 light sensor data fields
+        cJSON_AddNumberToObject(data_root, "sunlight", input_data_ptr->sunlight);
+        cJSON_AddBoolToObject(data_root, "sensor_ok", input_data_ptr->sensor_ok);
         
         // PutOutputFormattingForMqttHere: Add more fields as needed
-        // Examples:
-        // cJSON_AddNumberToObject(data_root, "yourField1", input_data_ptr->your_field1);
-        // cJSON_AddStringToObject(data_root, "yourField2", input_data_ptr->your_field2);
-        // cJSON_AddBoolToObject(data_root, "yourField3", input_data_ptr->your_field3);
+        // The sunlight field contains the light intensity in lux units
+        // The sensor_ok field indicates if the sensor reading was successful
         
         cJSON_AddItemToObject(root, "data", data_root);
     }
