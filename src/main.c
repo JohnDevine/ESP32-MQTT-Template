@@ -1,12 +1,11 @@
 /*
- * ESP32 MQTT Weather Station with BH1750 Light Sensor
+ * ESP32 MQTT Sensor Template
  * 
- * This project implements an ESP32-based weather monitoring station that reads
- * ambient light data from a BH1750 digital light sensor via I2C and publishes
- * the measurements to an MQTT broker.
+ * This project implements an ESP32-based sensor monitoring system that reads
+ * data from various sensors and publishes the measurements to an MQTT broker.
  * 
  * FEATURES:
- * - BH1750 digital light sensor reading via I2C (GPIO21/SDA, GPIO22/SCL)
+ * - Configurable sensor reading (I2C, SPI, GPIO, or other protocols)
  * - MQTT connectivity with automatic reconnection handling
  * - WiFi configuration with captive portal for easy setup
  * - Web-based configuration interface for all parameters
@@ -16,13 +15,17 @@
  * 
  * HARDWARE REQUIREMENTS:
  * - ESP32 development board
- * - BH1750 digital light sensor (I2C interface)
- * - Pull-up resistors for I2C lines (typically 4.7kΩ)
+ * - Sensor(s) of your choice (configure protocol and pins as needed)
+ * - Pull-up resistors for I2C lines if using I2C (typically 4.7kΩ)
  * 
  * DATA OUTPUT:
- * - Light intensity in lux (floating point)
+ * - Configurable sensor data (modify data structure as needed)
  * - Sensor status and processor metrics
  * - JSON format via MQTT for integration with home automation systems
+ * 
+ * CUSTOMIZATION POINTS:
+ * Search for "TEMPLATE:" comments throughout the code to find areas that need
+ * customization for your specific sensor(s) and use case.
  */
 
 /*
@@ -54,8 +57,13 @@
 #include "freertos/task.h"
 // ESP32 GPIO driver
 #include "driver/gpio.h"
-// ESP32 I2C master driver for BH1750 sensor (new driver)
-#include "driver/i2c_master.h"
+// TEMPLATE: Include sensor-specific drivers here
+// Examples:
+// - I2C: #include "driver/i2c_master.h"
+// - SPI: #include "driver/spi_master.h"
+// - UART: #include "driver/uart.h"
+// - ADC: #include "esp_adc/adc_oneshot.h"
+#include "driver/i2c_master.h"  // Remove if not using I2C
 // ESP-IDF logging library
 #include "esp_log.h"
 // Standard C string manipulation library (for memcmp)
@@ -120,33 +128,31 @@ static bool debug_logging = false;
 static char wifi_ssid[33] = DEFAULT_WIFI_SSID;
 static char wifi_pass[65] = DEFAULT_WIFI_PASS;
 static char mqtt_broker_url[128] = DEFAULT_MQTT_BROKER_URL;
-char data_topic[41] = "Data/BH1750";  // Default MQTT topic for BH1750 sensor data
+// TEMPLATE: Update default topic name for your sensor type
+char data_topic[41] = "Data/Sensor";  // Default MQTT topic for sensor data
 static long sample_interval_ms = DEFAULT_SAMPLE_INTERVAL;
 static uint32_t watchdog_reset_counter = 0;  // Watchdog timer reset counter
 
 #define BOOT_BTN_GPIO GPIO_NUM_0
 
-// I2C configuration for BH1750 light sensor (new I2C master driver)
+// TEMPLATE: Configure your sensor communication pins and settings here
+// Example I2C configuration (remove if not using I2C)
 #define I2C_MASTER_SCL_IO           GPIO_NUM_22    // SCL GPIO pin
 #define I2C_MASTER_SDA_IO           GPIO_NUM_21    // SDA GPIO pin
 #define I2C_MASTER_FREQ_HZ          100000         // I2C master clock frequency (100kHz)
 #define I2C_MASTER_TIMEOUT_MS       1000
 
-// BH1750 sensor configuration
-#define BH1750_ADDR                 0x23           // BH1750 I2C address (ADDR pin low)
-#define BH1750_CMD_POWER_ON         0x01           // Power on command
-#define BH1750_CMD_POWER_DOWN       0x00           // Power down command
-#define BH1750_CMD_RESET            0x07           // Reset command
-#define BH1750_CMD_CONT_HIGH_RES    0x10           // Continuous H-Resolution mode
-#define BH1750_CMD_CONT_HIGH_RES2   0x11           // Continuous H-Resolution mode2
-#define BH1750_CMD_CONT_LOW_RES     0x13           // Continuous L-Resolution mode
-#define BH1750_CMD_ONE_HIGH_RES     0x20           // One Time H-Resolution mode
-#define BH1750_CMD_ONE_HIGH_RES2    0x21           // One Time H-Resolution mode2
-#define BH1750_CMD_ONE_LOW_RES      0x23           // One Time L-Resolution mode
+// TEMPLATE: Replace with your sensor's I2C address and commands (remove if not using I2C)
+// Example sensor configuration
+#define SENSOR_I2C_ADDR             0x23           // Replace with your sensor's I2C address
+#define SENSOR_CMD_INIT             0x01           // Replace with initialization command
+#define SENSOR_CMD_READ             0x10           // Replace with read command
+// Add more sensor-specific commands as needed
 
-// I2C master bus and device handles (new I2C driver)
+// TEMPLATE: Configure communication handles (modify based on your sensor type)
+// I2C handles (remove if not using I2C)
 static i2c_master_bus_handle_t i2c_bus_handle;
-static i2c_master_dev_handle_t bh1750_dev_handle;
+static i2c_master_dev_handle_t sensor_dev_handle;
 
 // Tag used for logging messages from this module
 static const char *TAG = "DATA_READER";
@@ -161,18 +167,28 @@ static const char *TAG = "DATA_READER";
 static esp_mqtt_client_handle_t mqtt_client;
 static int wifi_retry_num = 0;
 
-// BH1750 sensor data structure
-// Replace this with your specific data structure
+// TEMPLATE: Define your sensor data structure here
+// Replace this with your specific sensor data fields
 typedef struct {
-    // PutInputCodeHere: Define your data structure fields here
-    // BH1750 light sensor data
-    float sunlight;  // Light intensity in lux
-    bool sensor_ok;  // Sensor status flag
-    // Add your specific data fields here
-} input_data_t;
+    // TEMPLATE: Add your sensor-specific data fields here
+    // Examples:
+    // float temperature;    // Temperature in Celsius
+    // float humidity;       // Relative humidity percentage
+    // float pressure;       // Atmospheric pressure in hPa
+    // int32_t light_level;  // Light intensity in lux
+    // bool sensor_1_ok;     // First sensor status
+    // bool sensor_2_ok;     // Second sensor status
+    
+    // Example fields (customize for your sensors):
+    float sensor_value_1;    // Primary sensor reading
+    float sensor_value_2;    // Secondary sensor reading (optional)
+    bool sensor_ok;          // Overall sensor status flag
+    
+    // Add more fields as needed for your specific sensors
+} sensor_data_t;
 
-// Global instance of input data
-static input_data_t current_input_data;
+// Global instance of sensor data
+static sensor_data_t current_sensor_data;
 
 
 // PutInputCodeHere: Define your protocol-specific data structures here
@@ -216,7 +232,7 @@ static bool test_mqtt_broker_connectivity(const char* broker_url);
 static bool check_wifi_connection(void);
 void wifi_init_sta(void);
 static void mqtt_app_start(void);
-void publish_input_data_mqtt(const input_data_t *input_data_ptr); // Publish sensor data to MQTT
+void publish_sensor_data_mqtt(const sensor_data_t *sensor_data_ptr); // Publish sensor data to MQTT
 
 // Forward declaration for DNS hijack task
 void dns_hijack_task(void *pvParameter);
@@ -241,7 +257,8 @@ uint8_t unpack_u8(const uint8_t *buffer, int offset) {
     return buffer[offset];
 }
 
-// I2C Master initialization for BH1750 sensor (new I2C master driver)
+// TEMPLATE: I2C Master initialization (modify for your sensor communication protocol)
+// Remove this entire function if not using I2C
 static esp_err_t init_i2c_master(void) {
     // Configure I2C master bus
     i2c_master_bus_config_t i2c_bus_config = {
@@ -259,16 +276,16 @@ static esp_err_t init_i2c_master(void) {
         return err;
     }
 
-    // Configure BH1750 device
-    i2c_device_config_t bh1750_cfg = {
+    // TEMPLATE: Configure your sensor device on the I2C bus
+    i2c_device_config_t sensor_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = BH1750_ADDR,
+        .device_address = SENSOR_I2C_ADDR,  // Use your sensor's I2C address
         .scl_speed_hz = I2C_MASTER_FREQ_HZ,
     };
 
-    err = i2c_master_bus_add_device(i2c_bus_handle, &bh1750_cfg, &bh1750_dev_handle);
+    err = i2c_master_bus_add_device(i2c_bus_handle, &sensor_cfg, &sensor_dev_handle);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "BH1750 device add failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Sensor device add failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -276,81 +293,95 @@ static esp_err_t init_i2c_master(void) {
     return ESP_OK;
 }
 
-// BH1750 sensor initialization (new I2C master driver)
-static esp_err_t bh1750_init(void) {
+// TEMPLATE: Sensor initialization function
+// Replace this with your specific sensor initialization sequence
+static esp_err_t sensor_init(void) {
     esp_err_t ret;
     uint8_t cmd_data;
 
-    // Power on the sensor
-    cmd_data = BH1750_CMD_POWER_ON;
-    ret = i2c_master_transmit(bh1750_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
+    // TEMPLATE: Add your sensor-specific initialization sequence here
+    // Example I2C sensor initialization:
+    
+    // Power on or initialize the sensor
+    cmd_data = SENSOR_CMD_INIT;  // Replace with your sensor's init command
+    ret = i2c_master_transmit(sensor_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "BH1750 power on failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Sensor initialization failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(10)); // Wait for power on
+    vTaskDelay(pdMS_TO_TICKS(10)); // Wait for sensor to initialize
 
-    // Set measurement mode to continuous high resolution
-    cmd_data = BH1750_CMD_CONT_HIGH_RES;
-    ret = i2c_master_transmit(bh1750_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "BH1750 mode set failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    // TEMPLATE: Add additional configuration commands for your sensor
+    // Example: Set measurement mode, resolution, etc.
+    // cmd_data = SENSOR_CMD_CONFIG;
+    // ret = i2c_master_transmit(sensor_dev_handle, &cmd_data, 1, I2C_MASTER_TIMEOUT_MS);
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "Sensor configuration failed: %s", esp_err_to_name(ret));
+    //     return ret;
+    // }
 
-    ESP_LOGI(TAG, "BH1750 sensor initialized successfully");
-    vTaskDelay(pdMS_TO_TICKS(120)); // Wait for first measurement (120ms for high res mode)
+    ESP_LOGI(TAG, "Sensor initialized successfully");
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for first measurement to be ready
     return ESP_OK;
 }
 
-// Read light intensity from BH1750 sensor (new I2C master driver)
-static esp_err_t bh1750_read_light(float *lux) {
+// TEMPLATE: Sensor reading function
+// Replace this with your specific sensor reading implementation
+static esp_err_t read_sensor_value(float *value1, float *value2) {
     esp_err_t ret;
-    uint8_t data[2];
+    uint8_t data[4];  // Adjust size based on your sensor's data format
 
-    // Read 2 bytes of data from BH1750
-    ret = i2c_master_receive(bh1750_dev_handle, data, 2, I2C_MASTER_TIMEOUT_MS);
+    // TEMPLATE: Read data from your sensor
+    // Example I2C sensor read:
+    ret = i2c_master_receive(sensor_dev_handle, data, 2, I2C_MASTER_TIMEOUT_MS);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "BH1750 read failed: %s", esp_err_to_name(ret));
-        *lux = -1.0f; // Error value
+        ESP_LOGE(TAG, "Sensor read failed: %s", esp_err_to_name(ret));
+        *value1 = -1.0f; // Error value
+        *value2 = -1.0f; // Error value
         return ret;
     }
 
-    // Convert the raw data to lux
+    // TEMPLATE: Convert raw data to meaningful values
+    // Example conversion (customize for your sensor):
     uint16_t raw_data = (data[0] << 8) | data[1];
-    *lux = raw_data / 1.2f;  // Resolution: 1 lux per 1.2 counts
+    *value1 = raw_data / 100.0f;  // Example conversion - adjust for your sensor
+    *value2 = raw_data / 200.0f;  // Example second value - remove if not needed
 
-    ESP_LOGD(TAG, "BH1750 raw data: %d, lux: %.1f", raw_data, *lux);
+    ESP_LOGD(TAG, "Sensor raw data: %d, value1: %.2f, value2: %.2f", raw_data, *value1, *value2);
     return ESP_OK;
 }
 
-// BH1750 sensor reading function
-// PutInputCodeHere: Replace this function with your specific input reading logic
-static bool read_input_data() {
-    ESP_LOGI(TAG, "Reading BH1750 light sensor data...");
+// TEMPLATE: Main sensor data reading function
+// Replace this function with your specific sensor reading logic
+static bool read_sensor_data() {
+    ESP_LOGI(TAG, "Reading sensor data...");
     
-    // Initialize input data fields to default/invalid values
-    current_input_data.sunlight = 0.0f;
-    current_input_data.sensor_ok = false;
+    // Initialize sensor data fields to default/invalid values
+    current_sensor_data.sensor_value_1 = 0.0f;
+    current_sensor_data.sensor_value_2 = 0.0f;
+    current_sensor_data.sensor_ok = false;
     
-    // PutInputCodeHere: Read from BH1750 I2C sensor
-    float lux_value;
-    esp_err_t ret = bh1750_read_light(&lux_value);
+    // TEMPLATE: Read from your sensor(s)
+    // Example I2C sensor reading:
+    float value1, value2;
+    esp_err_t ret = read_sensor_value(&value1, &value2);
     
-    if (ret == ESP_OK && lux_value >= 0) {
-        current_input_data.sunlight = lux_value;
-        current_input_data.sensor_ok = true;
-        ESP_LOGI(TAG, "BH1750 reading successful: %.1f lux", lux_value);
+    if (ret == ESP_OK && value1 >= 0) {
+        current_sensor_data.sensor_value_1 = value1;
+        current_sensor_data.sensor_value_2 = value2;  // Remove if not needed
+        current_sensor_data.sensor_ok = true;
+        ESP_LOGI(TAG, "Sensor reading successful: %.2f, %.2f", value1, value2);
         
         // Publish MQTT data only on successful sensor read
-        publish_input_data_mqtt(&current_input_data);
+        publish_sensor_data_mqtt(&current_sensor_data);
         ESP_LOGI(TAG, "MQTT data published after successful sensor read");
         return true;
     } else {
-        current_input_data.sunlight = -1.0f;  // Error value
-        current_input_data.sensor_ok = false;
-        ESP_LOGE(TAG, "BH1750 reading failed - skipping MQTT publish");
+        current_sensor_data.sensor_value_1 = -1.0f;  // Error value
+        current_sensor_data.sensor_value_2 = -1.0f;  // Error value
+        current_sensor_data.sensor_ok = false;
+        ESP_LOGE(TAG, "Sensor reading failed - skipping MQTT publish");
         return false;
     }
 }
@@ -1381,20 +1412,21 @@ void app_main(void) {
         }
     }
 
-    // Initialize I2C communication for BH1750 sensor
-    ESP_LOGI(TAG, "Initializing I2C master for BH1750 sensor...");
-    esp_err_t i2c_err = init_i2c_master();
-    if (i2c_err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C master initialization failed: %s", esp_err_to_name(i2c_err));
+    // TEMPLATE: Initialize sensor communication (modify for your sensor type)
+    // Remove I2C initialization if not using I2C sensors
+    ESP_LOGI(TAG, "Initializing sensor communication...");
+    esp_err_t comm_err = init_i2c_master();  // Change to your communication init function
+    if (comm_err != ESP_OK) {
+        ESP_LOGE(TAG, "Sensor communication initialization failed: %s", esp_err_to_name(comm_err));
     } else {
-        ESP_LOGI(TAG, "I2C master initialized successfully");
+        ESP_LOGI(TAG, "Sensor communication initialized successfully");
         
-        // Initialize BH1750 sensor
-        esp_err_t bh1750_err = bh1750_init();
-        if (bh1750_err != ESP_OK) {
-            ESP_LOGE(TAG, "BH1750 sensor initialization failed: %s", esp_err_to_name(bh1750_err));
+        // TEMPLATE: Initialize your specific sensor(s)
+        esp_err_t sensor_err = sensor_init();  // Replace with your sensor init function
+        if (sensor_err != ESP_OK) {
+            ESP_LOGE(TAG, "Sensor initialization failed: %s", esp_err_to_name(sensor_err));
         } else {
-            ESP_LOGI(TAG, "BH1750 sensor initialized successfully");
+            ESP_LOGI(TAG, "Sensor initialized successfully");
         }
     }
 
@@ -1489,14 +1521,14 @@ void app_main(void) {
         ESP_LOGD(TAG, "[MAIN LOOP] After reset mqtt_publish_success");
 
         // Read sensor data and attempt to publish if successful
-        bool sensor_read_success = read_input_data();
+        bool sensor_read_success = read_sensor_data();
         
         if (sensor_read_success) {
             ESP_LOGD(TAG, "[MAIN LOOP] Sensor read successful, data will be published to MQTT");
         } else {
             ESP_LOGW(TAG, "[MAIN LOOP] Sensor read failed, no MQTT data will be published this cycle");
         }
-        ESP_LOGD(TAG, "[MAIN LOOP] After read_input_data");
+        ESP_LOGD(TAG, "[MAIN LOOP] After read_sensor_data");
 
         if (debug_logging) {
             ESP_LOGI(TAG, "Waiting %ld ms before next sensor read cycle...", sample_interval_ms);
@@ -1895,8 +1927,8 @@ static char* get_chip_id(void) {
 
 // Function to publish sensor data to MQTT broker
 // This function will be expanded to create and send the two JSON messages
-void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
-    if (debug_logging) printf("[DEBUG] publish_input_data_mqtt() called\n");
+void publish_sensor_data_mqtt(const sensor_data_t *sensor_data_ptr) {
+    if (debug_logging) printf("[DEBUG] publish_sensor_data_mqtt() called\n");
     
     if (!mqtt_client) {
         ESP_LOGE(TAG, "MQTT client not initialized!");
@@ -1904,10 +1936,9 @@ void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
         return;
     }
 
-    ESP_LOGI(TAG, "Preparing to publish input data via MQTT...");
+    ESP_LOGI(TAG, "Preparing to publish sensor data via MQTT...");
 
-    // PutOutputFormattingForMqttHere: Replace this JSON creation with your specific format
-    // Create JSON with your specific data structure
+    // TEMPLATE: Create JSON with your specific data structure
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         ESP_LOGE(TAG, "Failed to create cJSON root object.");
@@ -1943,17 +1974,22 @@ void publish_input_data_mqtt(const input_data_t *input_data_ptr) {
         cJSON_AddItemToObject(root, "processor", processor_root);
     }
 
-    // PutOutputFormattingForMqttHere: Add your specific data formatting here
-    // BH1750 light sensor data
+    // TEMPLATE: Add your specific sensor data formatting here
+    // Replace with your sensor-specific data fields
     cJSON *data_root = cJSON_CreateObject();
     if (data_root) {
-        // BH1750 light sensor data fields
-        cJSON_AddNumberToObject(data_root, "sunlight", input_data_ptr->sunlight);
-        cJSON_AddBoolToObject(data_root, "sensor_ok", input_data_ptr->sensor_ok);
+        // TEMPLATE: Add your sensor data fields here
+        // Examples (customize for your sensors):
+        cJSON_AddNumberToObject(data_root, "sensor_value_1", sensor_data_ptr->sensor_value_1);
+        cJSON_AddNumberToObject(data_root, "sensor_value_2", sensor_data_ptr->sensor_value_2);
+        cJSON_AddBoolToObject(data_root, "sensor_ok", sensor_data_ptr->sensor_ok);
         
-        // PutOutputFormattingForMqttHere: Add more fields as needed
-        // The sunlight field contains the light intensity in lux units
-        // The sensor_ok field indicates if the sensor reading was successful
+        // TEMPLATE: Add more fields as needed for your specific sensors
+        // Examples:
+        // cJSON_AddNumberToObject(data_root, "temperature", sensor_data_ptr->temperature);
+        // cJSON_AddNumberToObject(data_root, "humidity", sensor_data_ptr->humidity);
+        // cJSON_AddNumberToObject(data_root, "pressure", sensor_data_ptr->pressure);
+        // cJSON_AddBoolToObject(data_root, "sensor_1_ok", sensor_data_ptr->sensor_1_ok);
         
         cJSON_AddItemToObject(root, "data", data_root);
     }

@@ -1,11 +1,12 @@
-# ESP32 BH1750 Light Sensor MQTT Template
+# ESP32 MQTT Sensor Template
 
 ## Overview
-This is an ESP32-based template project for creating light sensor monitoring systems. It provides a complete foundation for collecting ambient light data from a BH1750 I2C sensor and publishing it to MQTT. The template includes web-based configuration, over-the-air updates, and robust connectivity with automatic recovery features.
+This is an ESP32-based template project for creating IoT sensor monitoring systems. It provides a complete foundation for collecting sensor data and publishing it to MQTT. The template includes web-based configuration, over-the-air updates, and robust connectivity with automatic recovery features.
 
-**Note**: This is a template project derived from ESP32-MQTT-Weather. Use this as a starting point for your own ESP32 IoT projects with sensor data collection and MQTT publishing capabilities.
+**Note**: This is a template project that can be customized for various sensors such as BH1750 (light), BME680 (environmental), temperature sensors, and more. Use this as a starting point for your own ESP32 IoT projects with sensor data collection and MQTT publishing capabilities.
+
 ## Features
-- **BH1750 Light Sensor**: High-precision ambient light measurement via I2C
+- **Configurable Sensor Support**: Template structure for I2C, SPI, GPIO, or UART sensors
 - **MQTT Publishing**: Automatic data publishing with configurable intervals
 - **Web Configuration**: Captive portal for easy WiFi and MQTT setup
 - **Over-the-Air Updates**: Remote firmware and file system updates
@@ -13,51 +14,42 @@ This is an ESP32-based template project for creating light sensor monitoring sys
 - **Watchdog Protection**: Automatic recovery from system failures
 - **Persistent Configuration**: Settings stored in ESP32 NVS (Non-Volatile Storage)
 
+## Template Customization Points
+Search for "TEMPLATE:" comments in the source code to find areas that need customization:
+- **Sensor Configuration**: Pin assignments and communication protocol setup
+- **Data Structure**: Define your sensor-specific data fields
+- **Sensor Initialization**: Add your sensor's initialization sequence
+- **Data Reading**: Implement your sensor's reading logic
+- **JSON Output**: Customize the MQTT data format
+
+## Supported Sensor Examples
+This template can be easily adapted for:
+- **BH1750**: Light sensor (I2C) - included as example
+- **BME680**: Environmental sensor (I2C/SPI) - temperature, humidity, pressure, gas
+- **DHT22**: Temperature and humidity sensor (GPIO)
+- **DS18B20**: Temperature sensor (1-Wire)
+- **MQ sensors**: Gas sensors (ADC)
+- **Analog sensors**: Using ESP32's ADC
+
 ## Hardware Components
 - **ESP32 Development Board** (tested with ESP32 DevKit V1)
-- **BH1750 Light Sensor Module** (I2C interface)
+- **Sensor Module(s)** (customize based on your needs)
 - **Power Supply**: 5V USB or 3.3V-5V power source
+- **Pull-up resistors**: 4.7kΩ for I2C sensors (if needed)
 
-## BH1750 Sensor Specifications
-- **Communication**: I2C interface (address 0x23)
-- **Resolution**: 16-bit ADC, 1 lux resolution
-- **Range**: 1 - 65535 lux
-- **Accuracy**: ±20% typical
-
-## Wiring Connections
-| BH1750 Pin | ESP32 Pin | Purpose                    |
-|------------|-----------|----------------------------|
-| VCC        | 3.3V      | Power supply               |
-| GND        | GND       | Ground                     |
-| SCL        | GPIO22    | I2C Clock                  |
-| SDA        | GPIO21    | I2C Data                   |
-| ADDR       | GND       | I2C Address (0x23)         |
-
+## Default Pin Configuration (Customizable)
 | Function      | ESP32 Pin     | Purpose                           |
 |---------------|---------------|-----------------------------------|
+| I2C SCL       | GPIO22        | I2C Clock (if using I2C sensors) |
+| I2C SDA       | GPIO21        | I2C Data (if using I2C sensors)  |
 | Status LED    | GPIO2         | System status and MQTT heartbeat |
 | Boot Button   | GPIO0         | Enter configuration mode          |
 
-## Light Level Reference
-The BH1750 sensor measures ambient light in lux units. Here are some typical readings:
-
-| Light Condition              | Approximate Lux Range |
-|------------------------------|----------------------|
-| Darkness                     | 0 - 1 lux           |
-| Moonlight                    | 0.1 - 1 lux         |
-| Indoor lighting (dim)        | 50 - 200 lux        |
-| Office lighting              | 300 - 500 lux       |
-| Bright office               | 500 - 1000 lux      |
-| Overcast day (outdoor)      | 1000 - 5000 lux     |
-| Full daylight (outdoor)     | 10000 - 25000 lux   |
-| Direct sunlight             | 25000 - 100000 lux  |
-
-*Note: These values are approximate and can vary based on specific conditions and sensor calibration.*
-- For troubleshooting, monitor the serial log output via USB.
+**Note**: Pin assignments can be changed in the source code based on your sensor requirements.
 
 ## MQTT Data Structure
 
-The ESP32 publishes light sensor data in JSON format to the configured MQTT topic. The message includes both system metrics and BH1750 sensor readings.
+The ESP32 publishes sensor data in JSON format to the configured MQTT topic. The message includes both system metrics and your custom sensor readings.
 
 ### Data Message Format
 ```json
@@ -72,10 +64,11 @@ The ESP32 publishes light sensor data in JSON format to the configured MQTT topi
     "WDTRestartCount": 2               // Watchdog restart counter
   },
   
-  // BH1750 light sensor data
+  // Sensor data (customize for your sensors)
   "data": {
-    "sunlight": 1250.5,                    // Light intensity in lux (float)
-    "sensor_ok": true                      // Sensor status (true = successful read)
+    "sensor_value_1": 1250.5,         // Primary sensor reading (customize)
+    "sensor_value_2": 25.3,           // Secondary sensor reading (optional)
+    "sensor_ok": true                  // Sensor status (true = successful read)
   }
 }
 ```
@@ -90,8 +83,9 @@ The ESP32 publishes light sensor data in JSON format to the configured MQTT topi
 - **ChipID**: Unique ESP32 chip identifier (MAC-based)
 - **WDTRestartCount**: Number of watchdog-triggered restarts (reliability metric)
 
-#### Light Sensor Data
-- **sunlight**: Light intensity in lux units (float, 0.0 - 65535.0)
+#### Sensor Data (Customize for Your Sensors)
+- **sensor_value_1**: Primary sensor reading (customize data type and units)
+- **sensor_value_2**: Secondary sensor reading (optional, remove if not needed)
 - **sensor_ok**: Boolean indicating successful sensor reading
 
 ### Data Publishing Behavior
@@ -101,7 +95,7 @@ The ESP32 publishes light sensor data in JSON format to the configured MQTT topi
 ## Configuration and Setup
 
 ### Initial Setup
-1. **Hardware Connection**: Wire the BH1750 sensor to ESP32 as shown in the wiring table
+1. **Hardware Connection**: Wire your sensor(s) to ESP32 according to your sensor's requirements
 2. **Power On**: Connect ESP32 to power source via USB
 3. **Configuration Mode**: 
    - Hold the boot button (GPIO0) during power-on for 10 seconds
@@ -126,37 +120,38 @@ The ESP32 publishes light sensor data in JSON format to the configured MQTT topi
 - **Reset Options**: Factory reset or watchdog counter reset
 
 ## Applications and Use Cases
-- **Smart Home**: Automatic lighting control based on ambient light
-- **Greenhouse Monitoring**: Track natural light levels for plant growth
-- **Energy Management**: Solar panel efficiency monitoring
-- **Building Automation**: HVAC and lighting optimization
-- **Environmental Monitoring**: Indoor/outdoor light level logging
-- **Photography**: Light meter for optimal exposure settings
-- **Circadian Lighting**: Adjust artificial lighting based on natural light cycles
+This template can be adapted for various IoT monitoring applications:
+- **Environmental Monitoring**: Temperature, humidity, air quality sensors
+- **Smart Home**: Light, motion, door/window sensors  
+- **Industrial IoT**: Pressure, vibration, current sensors
+- **Agriculture**: Soil moisture, pH, light sensors
+- **Energy Management**: Power consumption, solar panel monitoring
+- **Security Systems**: Motion detection, door/window status
+- **Weather Stations**: Temperature, humidity, pressure, rainfall
+- **Building Automation**: HVAC monitoring and control
 
 ## MQTT Integration Examples
 
 ### Home Assistant Integration
 ```yaml
-# configuration.yaml
+# configuration.yaml - Customize for your sensor data
 sensor:
   - platform: mqtt
-    name: "ESP32 Light Sensor"
-    state_topic: "sensors/light/data"
-    value_template: "{{ value_json.data.sunlight }}"
-    unit_of_measurement: "lux"
-    device_class: "illuminance"
+    name: "ESP32 Sensor Reading"
+    state_topic: "sensors/data"
+    value_template: "{{ value_json.data.sensor_value_1 }}"
+    unit_of_measurement: "units"  # Customize units for your sensor
     
   - platform: mqtt
     name: "ESP32 WiFi Signal"
-    state_topic: "sensors/light/data"
+    state_topic: "sensors/data"
     value_template: "{{ value_json.processor.WiFiRSSI }}"
     unit_of_measurement: "%"
     
 binary_sensor:
   - platform: mqtt
-    name: "ESP32 Light Sensor Status"
-    state_topic: "sensors/light/data"
+    name: "ESP32 Sensor Status"
+    state_topic: "sensors/data"
     value_template: "{{ value_json.data.sensor_ok }}"
     payload_on: true
     payload_off: false
@@ -164,7 +159,8 @@ binary_sensor:
 
 ### InfluxDB Line Protocol
 ```influxdb
-light_sensor,device=ESP32-Light-Sensor,location=living_room sunlight=1250.5,wifi_rssi=75,sensor_ok=1 1642234567890000000
+# Customize for your sensor data
+sensor_data,device=ESP32-Sensor,location=room sensor_value_1=1250.5,wifi_rssi=75,sensor_ok=1 1642234567890000000
 ```
 
 ### Node-RED Flow Example
@@ -173,7 +169,7 @@ light_sensor,device=ESP32-Light-Sensor,location=living_room sunlight=1250.5,wifi
   {
     "id": "mqtt_in",
     "type": "mqtt in",
-    "topic": "sensors/light/data",
+    "topic": "sensors/data",
     "broker": "mqtt_broker"
   },
   {
@@ -181,25 +177,51 @@ light_sensor,device=ESP32-Light-Sensor,location=living_room sunlight=1250.5,wifi
     "type": "json"
   },
   {
-    "id": "light_switch",
+    "id": "sensor_switch",
     "type": "switch",
-    "property": "payload.data.sunlight",
+    "property": "payload.data.sensor_value_1",
     "rules": [
-      {"t": "lt", "v": "300", "vt": "num"},
-      {"t": "gte", "v": "300", "vt": "num"}
+      {"t": "lt", "v": "threshold", "vt": "num"},
+      {"t": "gte", "v": "threshold", "vt": "num"}
     ]
   }
 ]
 ```
+
+## Getting Started with Customization
+
+To adapt this template for your specific sensor:
+
+1. **Update Sensor Configuration**: 
+   - Modify the `#define` statements for your sensor's I2C address and commands
+   - Change pin assignments if needed
+
+2. **Customize Data Structure**:
+   - Edit the `sensor_data_t` struct to match your sensor's data fields
+   - Update variable names and data types as needed
+
+3. **Implement Sensor Functions**:
+   - Replace `sensor_init()` with your sensor's initialization sequence
+   - Modify `read_sensor_value()` to read your sensor's data format
+   - Update `read_sensor_data()` to populate your data structure
+
+4. **Update MQTT Format**:
+   - Customize the JSON output in `publish_sensor_data_mqtt()`
+   - Change field names and add/remove data fields as needed
+
+5. **Update Documentation**:
+   - Modify this README for your specific sensor and use case
+   - Update the MQTT data structure documentation
 
 ## Troubleshooting
 
 ### Common Issues
 
 #### Sensor Not Reading
-- **Check Wiring**: Verify BH1750 connections (VCC, GND, SCL, SDA)
-- **I2C Address**: Ensure ADDR pin is connected to GND (address 0x23)
-- **Power Supply**: BH1750 requires 2.4V - 3.6V (use ESP32 3.3V pin)
+- **Check Wiring**: Verify sensor connections according to your sensor's datasheet
+- **Communication Protocol**: Ensure correct I2C address, SPI settings, or GPIO configuration
+- **Power Supply**: Verify sensor voltage requirements (3.3V vs 5V)
+- **Pull-up Resistors**: Add 4.7kΩ pull-ups for I2C if not already present
 - **Pull-up Resistors**: Most BH1750 modules include built-in pull-ups
 
 #### WiFi Connection Issues
